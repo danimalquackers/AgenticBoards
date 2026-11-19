@@ -1,0 +1,13 @@
+{
+  "$schema": "https://cdn.jsdelivr.net/npm/@tscircuit/cli/types/tscircuit.config.schema.json",
+  "mainEntrypoint": "src/boards/main.circuit.tsx",
+  "ignoredFiles": [
+    "dist/**",
+    "node_modules/**",
+    "checks/**",
+    "tests/**",
+    "scripts/**",
+    "specs/**",
+    ".agents/**"
+  ]
+}

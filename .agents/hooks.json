@@ -1,0 +1,12 @@
+{
+  "pcb-tdd-guard": {
+    "enabled": true,
+    "Stop": [
+      {
+        "type": "command",
+        "command": "./hooks/verify-before-stop.sh",
+        "timeout": 10
+      }
+    ]
+  }
+}
