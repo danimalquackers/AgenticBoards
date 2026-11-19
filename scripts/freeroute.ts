@@ -20,7 +20,7 @@ const dsnPath = resolve(outDir, "board.dsn")
 const sesPath = resolve(outDir, "board.ses")
 
 console.log(`[ROUTE] Exporting Specctra DSN from ${spec.entrypoint}...`)
-const exp = spawnSync("tsci", ["export", "-f", "specctra-dsn", "-o", dsnPath, entry], {
+const exp = spawnSync("tscircuit-cli", ["export", "-f", "specctra-dsn", "-o", dsnPath, entry], {
   cwd: rootDir,
   stdio: "inherit",
 })

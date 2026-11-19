@@ -134,9 +134,15 @@ export const BoardSpecSchema = z.object({
     .object({
       highSpeedNets: z.array(z.string()).default([]),
       differentialPairs: z.array(z.tuple([z.string(), z.string()])).default([]),
+      maxDiffPairSkewMm: z.number().positive().default(0.5),
       maxTraceLengthMm: z.record(z.string(), z.number().positive()).default({}),
     })
-    .default({ highSpeedNets: [], differentialPairs: [], maxTraceLengthMm: {} }),
+    .default({
+      highSpeedNets: [],
+      differentialPairs: [],
+      maxDiffPairSkewMm: 0.5,
+      maxTraceLengthMm: {},
+    }),
 
   requiredComponents: z
     .array(

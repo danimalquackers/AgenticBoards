@@ -1,4 +1,4 @@
-# Declarative PCB development environment (no Bun, no manual `npm install`).
+# Declarative Nix development environment for AgenticBoards.
 # Works with `nix-shell`, `nix develop`, and `direnv` via `.envrc`.
 { pkgs ? import <nixpkgs> { } }:
 
@@ -10,41 +10,36 @@ let
       npmFlags = [ "--legacy-peer-deps" ];
     };
   };
+
+  # Upstream `tscircuit/cli.mjs` uses a `#!/usr/bin/env bun` shebang despite being
+  # standard Node ESM; wrap `tsci` so it runs cleanly under Nix's Node 24 runtime.
+  tsci = pkgs.writeShellScriptBin "tsci" ''
+    exec ${pkgs.nodejs}/bin/node "${nodeModules}/node_modules/tscircuit/cli.mjs" "$@"
+  '';
 in
 pkgs.mkShell {
   name = "agentic-boards";
 
   packages = with pkgs; [
-    # Node.js 24 LTS runtime & Biome linter/formatter
     nodejs
+    tsci
     biome
-
-    # Electrical simulation (SPICE)
     ngspice
-
-    # External Specctra DSN/SES PCB autorouter
     freerouting
-
-    # Independent KiCad ERC/DRC/export verification (provides kicad-cli & gerbview)
     kicad-small
-
-    # Scripting & utilities for hooks, BOM, and thermal/impedance helpers
     jq
-    python3
     zip
     unzip
   ];
 
   shellHook = ''
-    # Symlink declarative /nix/store node_modules into workspace when absent or already a symlink
     if [ -L node_modules ] || [ ! -e node_modules ]; then
       ln -sfn "${nodeModules}/node_modules" node_modules
     fi
-    export PATH="${nodeModules}/node_modules/.bin:$PATH"
+    export PATH="${tsci}/bin:${nodeModules}/node_modules/.bin:$PATH"
     export TSCI_TELEMETRY_DISABLED=1
 
-    echo "[AgenticBoards] Declarative PCB shell ready."
-    echo "  Tools: node $(node --version) | tsci | ngspice | freerouting | kicad-cli | biome"
+    echo "[AgenticBoards] Shell ready: node $(node --version) | tsci | ngspice | kicad-cli | freerouting | biome"
     echo "  Commands: npm run dev | npm run verify | npm run export | npm run route"
   '';
 }

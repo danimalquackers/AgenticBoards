@@ -1,44 +1,39 @@
 ---
 name: pcb-release
 description: >-
-  Verify, autoroute (internal or external Freerouting), and export manufacturable
-  deliverables: SVG renders, Gerbers, KiCad project, STEP/glTF 3D models, BOM CSV,
-  and independent KiCad CLI DRC cross-checks.
+  Final fab-readiness sign-off: run full verification, optional external
+  Freerouting, and export Gerbers, JLCPCB BOM + Pick-and-Place CPL, KiCad
+  project, STEP/glTF 3D models, SVG renders, and independent KiCad CLI DRC.
 ---
 
-# Verification, External Autorouting & Manufacturing Export
+# Fab-Ready Verification & Manufacturing Export
 
-## 1. Final Verification Gate
-Run:
+## 1. Full Verification Gate
 ```bash
 npm run verify
 ```
-Confirm zero TypeScript, Biome lint, DRC, mechanical, fab, BOM budget, electrical,
-or SPICE simulation errors.
+Must pass with zero TypeScript, Biome, DRC, unrouted-trace, edge-clearance,
+mechanical, fab, BOM-budget, IPC-2221 ampacity, diff-pair skew, or SPICE errors.
 
-## 2. Optional External Autorouting (Freerouting)
-If tscircuit's built-in `autorouter="auto-local"` cannot cleanly route a dense
-multi-layer board, run:
+## 2. Optional External Autorouting
+For dense multi-layer boards where `autorouter="auto-local"` cannot route cleanly:
 ```bash
 npm run route
 ```
-This exports Specctra DSN (`dist/routing/board.dsn`) and invokes headless
-`freerouting` to generate `dist/routing/board.ses` (importable into KiCad on
-`dist/exports/board.kicad_pcb`).
+Exports `dist/routing/board.dsn` and runs headless `freerouting` -> `dist/routing/board.ses`.
 
-## 3. Export All Manufacturing & Visual Deliverables
-Run:
+## 3. Manufacturing & PCBA Export + Independent KiCad DRC
 ```bash
 npm run export
 ```
-Outputs to `dist/exports/`:
-- **Renders**: `schematic.svg`, `pcb.svg`, `assembly.svg`
-- **Fabrication**: `gerbers.zip` (Gerbers + Excellon drills), `bom.csv`
-- **KiCad**: `kicad-project.zip`, `board.kicad_pcb`, `board.kicad_sch`
-- **3D CAD**: `board.step`, `board.gltf`
-- **Netlist / DSN**: `netlist.txt`, `board.dsn`
-- **Independent DRC**: `kicad-drc.json` (run via `kicad-cli pcb drc`)
+Generates `dist/exports/` and exits non-zero if internal verification OR
+`kicad-cli pcb drc` finds any error or unconnected net:
+- **Fabrication & PCBA**: `gerbers.zip`, `bom.csv` (JLCPCB-formatted), `pnp.csv` (Pick-and-Place CPL)
+- **KiCad**: `kicad-project.zip`, `board.kicad_pcb`, `board.kicad_sch`, `kicad-drc.json`
+- **3D & Renders**: `board.step`, `board.gltf`, `schematic.svg`, `pcb.svg`, `assembly.svg`
+- **Netlist / Routing**: `netlist.txt`, `board.dsn`
 
-Review `dist/exports/kicad-drc.json` for any clearance or copper issues, optionally
-run `tsci quote` for fab pricing, and open `http://localhost:3020` in the integrated
-browser (`npm run dev`) for final visual sign-off with the user.
+Inspect `dist/exports/kicad-drc.json` for any remaining warnings, optionally run
+`tsci quote` for fab pricing, and open `http://localhost:3020` (`npm run dev`) in
+the integrated browser for final visual sign-off (silkscreen legibility, polarity
+marks, connector alignment, 3D clearances).

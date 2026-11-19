@@ -1,54 +1,45 @@
 # AgenticBoards
 
-A declarative **Nix + TDD-for-PCBs** template for designing, simulating, and
-exporting circuit boards with an AI coding agent in **Antigravity**.
+A declarative Nix + TDD starter template for designing **fabrication- and
+assembly-ready PCBs** with an AI coding agent in Antigravity.
 
-Built on **Nix (`shell.nix` / `flake.nix`)**, **Node.js 22**, **tscircuit**,
-**ngspice**, **KiCad CLI**, **Freerouting**, and **Biome** — no Bun and no manual
-`npm install` required.
+Powered by **tscircuit**, **ngspice**, **KiCad CLI**, **Freerouting**, **Node.js 24**,
+and **Biome**.
 
-## Start a New Electronics Project
+## Start a New Project
 
-### Option A: Nix Flake Template
-
+**Nix Flake Template:**
 ```bash
 nix flake new my-board -t github:<owner>/AgenticBoards
-cd my-board
-git init && git add -A
-direnv allow      # or `nix develop` / `nix-shell`
+cd my-board && git init && git add -A && direnv allow
 ```
 
-### Option B: Git Clone / GitHub Template
+**Or Git Clone / GitHub Template:**
 ```bash
-git clone <your-repo-url> my-board
-cd my-board
-direnv allow      # or `nix develop` / `nix-shell`
+git clone <repo-url> my-board && cd my-board && direnv allow
 ```
 
-`shell.nix` uses `importNpmLock` to build `node_modules` declaratively into
-`/nix/store` from `package-lock.json` and symlink it automatically alongside
-`ngspice`, `kicad-cli`, `freerouting`, and `biome`.
-
-Open the folder in Antigravity and prompt the agent with your PCB goals and
-constraints (dimensions, budget, power rails, interfaces, layer count).
+Entering the shell (`direnv allow`, `nix develop`, or `nix-shell`) provisions all
+tools and builds/links `node_modules` declaratively from `package-lock.json`.
+Open the folder in Antigravity and prompt the agent with your PCB goals, dimensions,
+budget, power rails, and interfaces.
 
 ## Commands
 
 | Command | Purpose |
 | :--- | :--- |
 | `npm run dev` | Start live tscircuit Schematic / PCB / 3D UI (`http://localhost:3020`) |
-| `npm run verify` | Run typecheck, lint, DRC, spec constraints, SI/PI/thermal & SPICE tests (`npm test` runs checks/tests only) |
-| `npm run export` | Export SVG renders, Gerbers, KiCad project, STEP/glTF 3D models, BOM CSV + `kicad-cli` DRC |
+| `npm run verify` | Run typecheck, Biome lint, DRC, spec/budget/SI/PI/thermal checks & SPICE tests (`npm test` runs checks/tests only) |
+| `npm run export` | Export Gerbers, JLCPCB BOM & PnP CSV, KiCad project, STEP/glTF 3D, SVGs + `kicad-cli` DRC gate |
 | `npm run route` | Optional external Freerouting (`Specctra DSN -> SES`) for dense boards |
 
-> **Adding npm packages declaratively**: Run `npm install --package-lock-only <pkg>`,
-> commit/stage `package.json` + `package-lock.json`, and run `direnv reload`.
+> **Updating npm dependencies**: `rm -f node_modules && npm install --package-lock-only --legacy-peer-deps`, stage `package.json` + `package-lock.json`, and run `direnv reload`.
 
-## Layout
+## Structure
 
-- `shell.nix`, `flake.nix`, `.envrc` — Single-source declarative Nix toolchain + flake template
-- `specs/board.spec.json` & `specs/board-spec.schema.ts` — Declarative TDD PCB contract (written first)
-- `src/boards/main.circuit.tsx` — Blank top-level board entrypoint
-- `src/subcircuits/`, `src/components/`, `src/simulations/` — Modular blocks, imported footprints/3D models, SPICE testbenches
-- `checks/` & `tests/` — Built-in DRC, mechanical/fab/budget constraints, IPC-2221/SI/PI heuristics, and Node test suites
-- `.agents/skills/` & `.agents/hooks.json` — Direct skills (`pcb-tdd`, `pcb-engineering`, `pcb-release`) and Stop verification guard
+- `shell.nix`, `flake.nix`, `.envrc` — Declarative Nix toolchain & flake template
+- `specs/board.spec.json` & `specs/board-spec.schema.ts` — TDD PCB specification contract (written first)
+- `src/boards/main.circuit.tsx` — Board entrypoint (`src/subcircuits/`, `src/components/`, `src/simulations/`)
+- `checks/` & `tests/` — Automated DRC, edge clearance, unrouted trace, BOM budget, IPC-2221 ampacity, diff-pair skew, and SPICE verification
+- `scripts/` — Full manufacturing/PCBA export pipeline (`export-all.ts`) & Freerouting wrapper (`freeroute.ts`)
+- `.agents/` — Workspace skills (`pcb-tdd`, `pcb-engineering`, `pcb-release`) & TDD Stop guard hook

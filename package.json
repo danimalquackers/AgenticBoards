@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Declarative Nix + TDD agentic PCB design template powered by tscircuit, ngspice, KiCad CLI, and Freerouting.",
   "scripts": {
-    "dev": "tsci dev src/boards/main.circuit.tsx",
+    "dev": "tscircuit-cli dev src/boards/main.circuit.tsx",
     "test": "node --import tsx --test tests/*.test.ts",
     "verify": "tsc --noEmit && biome check . && npm test",
     "export": "tsx scripts/export-all.ts",

@@ -138,12 +138,19 @@ export function runElectricalHeuristics(circuitJson: any[], spec: BoardSpec): Ch
       )
     }, Number.POSITIVE_INFINITY)
 
-    if (nearest > spec.electrical.maxDecouplingDistanceMm) {
+    if (!Number.isFinite(nearest)) {
+      findings.push({
+        id: "pi.decoupling.ic_missing",
+        category: "power-integrity",
+        severity: "error",
+        message: `IC ${chip.name} has no decoupling capacitor on the board.`,
+      })
+    } else if (nearest > spec.electrical.maxDecouplingDistanceMm) {
       findings.push({
         id: "pi.decoupling.distance",
         category: "power-integrity",
         severity: "warning",
-        message: `IC ${chip.name} nearest decoupling cap is ${Number.isFinite(nearest) ? `${nearest.toFixed(1)}mm` : "missing"} away (max ${spec.electrical.maxDecouplingDistanceMm}mm).`,
+        message: `IC ${chip.name} nearest decoupling cap is ${nearest.toFixed(1)}mm away (max ${spec.electrical.maxDecouplingDistanceMm}mm).`,
       })
     }
   }
@@ -179,8 +186,8 @@ export function runElectricalHeuristics(circuitJson: any[], spec: BoardSpec): Ch
         findings.push({
           id: "thermal.ampacity.trace_too_narrow",
           category: "thermal",
-          severity: "warning",
-          message: `Net "${rail.net}" (${rail.maxCurrentA}A) trace ${minW.toFixed(3)}mm < recommended ${reqWidth.toFixed(3)}mm (ΔT<=${spec.electrical.maxTraceTempRiseC}°C).`,
+          severity: "error",
+          message: `Net "${rail.net}" (${rail.maxCurrentA}A) trace ${minW.toFixed(3)}mm < required ${reqWidth.toFixed(3)}mm (IPC-2221, ΔT<=${spec.electrical.maxTraceTempRiseC}°C).`,
         })
         break
       }
@@ -214,16 +221,21 @@ export function runElectricalHeuristics(circuitJson: any[], spec: BoardSpec): Ch
       message: `High-speed nets (${spec.signalIntegrity.highSpeedNets.join(", ")}) on ${spec.dimensions.layers} layers: consider a 4-layer stackup with solid GND plane.`,
     })
   }
-  for (const [netName, maxLen] of Object.entries(spec.signalIntegrity.maxTraceLengthMm)) {
+  const routedLengthForNet = (netName: string): number | null => {
     const net = netByName.get(netName)
-    if (!net) continue
+    if (!net) return null
     let totalLen = 0
     for (const pt of pcbTraces) {
       if (connMap.areIdsConnected(pt.source_trace_id ?? pt.pcb_trace_id, net.source_net_id)) {
         totalLen += traceLengthMm(pt)
       }
     }
-    if (totalLen > maxLen) {
+    return totalLen
+  }
+
+  for (const [netName, maxLen] of Object.entries(spec.signalIntegrity.maxTraceLengthMm)) {
+    const totalLen = routedLengthForNet(netName)
+    if (totalLen !== null && totalLen > maxLen) {
       findings.push({
         id: "si.trace_length.exceeded",
         category: "signal-integrity",
@@ -231,6 +243,41 @@ export function runElectricalHeuristics(circuitJson: any[], spec: BoardSpec): Ch
         message: `Net "${netName}" routed length ${totalLen.toFixed(1)}mm exceeds maxTraceLengthMm (${maxLen}mm).`,
       })
     }
+  }
+
+  for (const [netA, netB] of spec.signalIntegrity.differentialPairs) {
+    const lenA = routedLengthForNet(netA)
+    const lenB = routedLengthForNet(netB)
+    if (lenA === null || lenB === null) {
+      findings.push({
+        id: "si.diff_pair.missing",
+        category: "signal-integrity",
+        severity: "error",
+        message: `Differential pair (${netA}, ${netB}) is missing one or both nets.`,
+      })
+      continue
+    }
+    const skew = Math.abs(lenA - lenB)
+    if (skew > spec.signalIntegrity.maxDiffPairSkewMm) {
+      findings.push({
+        id: "si.diff_pair.skew",
+        category: "signal-integrity",
+        severity: "error",
+        message: `Differential pair (${netA}=${lenA.toFixed(2)}mm, ${netB}=${lenB.toFixed(2)}mm) skew ${skew.toFixed(2)}mm exceeds maxDiffPairSkewMm (${spec.signalIntegrity.maxDiffPairSkewMm}mm).`,
+      })
+    }
+  }
+
+  // 6. Silkscreen board labeling check for non-empty boards
+  const silkTexts = circuitJson.filter((el) => el?.type === "pcb_silkscreen_text")
+  if (sourceComponents.length > 0 && silkTexts.length === 0) {
+    findings.push({
+      id: "fab.silkscreen.missing_board_label",
+      category: "fab",
+      severity: "warning",
+      message:
+        "No silkscreen labels found; add board name/revision and connector pin labels before fab.",
+    })
   }
 
   return findings

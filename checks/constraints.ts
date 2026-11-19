@@ -140,7 +140,29 @@ export function runConstraintChecks(circuitJson: any[], spec: BoardSpec): Constr
     }
   }
 
-  // 4. Fab rules: trace widths & via geometry
+  // 4. Fab rules: trace widths, vias, copper-to-edge clearance, and routing completeness
+  const sourceTraces = circuitJson.filter((el) => el?.type === "source_trace")
+  const routedSourceTraceIds = new Set(
+    pcbTraces.filter((t) => (t.route?.length ?? 0) >= 2).map((t) => t.source_trace_id),
+  )
+  for (const st of sourceTraces) {
+    if (!routedSourceTraceIds.has(st.source_trace_id)) {
+      findings.push({
+        id: "drc.unrouted_trace",
+        category: "drc",
+        severity: "error",
+        message: `Source trace ${st.source_trace_id} has no routed PCB copper trace (unrouted airwire).`,
+      })
+    }
+  }
+
+  const boardCenterX = pcbBoard?.center?.x ?? 0
+  const boardCenterY = pcbBoard?.center?.y ?? 0
+  const edgeLimitX =
+    widthMm !== null ? widthMm / 2 - spec.fabRules.minEdgeClearanceMm : Number.POSITIVE_INFINITY
+  const edgeLimitY =
+    heightMm !== null ? heightMm / 2 - spec.fabRules.minEdgeClearanceMm : Number.POSITIVE_INFINITY
+
   for (const trace of pcbTraces) {
     for (const seg of trace.route ?? []) {
       if (typeof seg.width === "number" && seg.width < spec.fabRules.minTraceWidthMm - 1e-4) {
@@ -149,6 +171,21 @@ export function runConstraintChecks(circuitJson: any[], spec: BoardSpec): Constr
           category: "fab",
           severity: "error",
           message: `Trace ${trace.pcb_trace_id} width ${seg.width}mm < fab min ${spec.fabRules.minTraceWidthMm}mm.`,
+        })
+        break
+      }
+      const halfW = typeof seg.width === "number" ? seg.width / 2 : 0
+      if (
+        typeof seg.x === "number" &&
+        typeof seg.y === "number" &&
+        (Math.abs(seg.x - boardCenterX) + halfW > edgeLimitX + 1e-3 ||
+          Math.abs(seg.y - boardCenterY) + halfW > edgeLimitY + 1e-3)
+      ) {
+        findings.push({
+          id: "fab.edge_clearance.trace",
+          category: "fab",
+          severity: "error",
+          message: `Trace ${trace.pcb_trace_id} violates minEdgeClearanceMm (${spec.fabRules.minEdgeClearanceMm}mm) from board outline.`,
         })
         break
       }
@@ -172,6 +209,20 @@ export function runConstraintChecks(circuitJson: any[], spec: BoardSpec): Constr
         category: "fab",
         severity: "error",
         message: `Via ${via.pcb_via_id} outer Ø ${via.outer_diameter}mm < fab min ${spec.fabRules.minViaDiameterMm}mm.`,
+      })
+    }
+    const viaR = (via.outer_diameter ?? 0) / 2
+    if (
+      typeof via.x === "number" &&
+      typeof via.y === "number" &&
+      (Math.abs(via.x - boardCenterX) + viaR > edgeLimitX + 1e-3 ||
+        Math.abs(via.y - boardCenterY) + viaR > edgeLimitY + 1e-3)
+    ) {
+      findings.push({
+        id: "fab.edge_clearance.via",
+        category: "fab",
+        severity: "error",
+        message: `Via ${via.pcb_via_id} violates minEdgeClearanceMm (${spec.fabRules.minEdgeClearanceMm}mm) from board outline.`,
       })
     }
   }
@@ -234,10 +285,11 @@ export function runConstraintChecks(circuitJson: any[], spec: BoardSpec): Constr
     }
   }
 
-  // 7. BOM cost & budget validation
+  // 7. BOM cost, part-number completeness & budget validation
   let bomCostUsd = 0
   let pricedComponents = 0
   const unpricedDesignators: string[] = []
+  const missingPartNums: string[] = []
   for (const sc of sourceComponents) {
     const name = String(sc.name ?? "")
     const entry = spec.budget.bomCosts[name]
@@ -247,6 +299,10 @@ export function runConstraintChecks(circuitJson: any[], spec: BoardSpec): Constr
     } else {
       unpricedDesignators.push(name)
     }
+    const hasPartNum = Boolean(
+      entry?.lcsc || entry?.mpn || sc.supplier_part_numbers?.jlcpcb?.length,
+    )
+    if (!hasPartNum) missingPartNums.push(name)
   }
   const totalUnitCostUsd = bomCostUsd + spec.budget.estimatedFabUnitUsd
 
@@ -254,8 +310,16 @@ export function runConstraintChecks(circuitJson: any[], spec: BoardSpec): Constr
     findings.push({
       id: "budget.bom.unpriced",
       category: "budget",
-      severity: "warning",
+      severity: "error",
       message: `${unpricedDesignators.length} component(s) missing from specs/board.spec.json budget.bomCosts: ${unpricedDesignators.join(", ")}.`,
+    })
+  }
+  if (missingPartNums.length > 0) {
+    findings.push({
+      id: "fab.bom.missing_part_number",
+      category: "fab",
+      severity: "warning",
+      message: `${missingPartNums.length} component(s) lack an LCSC/MPN part number for PCBA: ${missingPartNums.join(", ")}.`,
     })
   }
   if (bomCostUsd > spec.budget.maxBomUsd) {

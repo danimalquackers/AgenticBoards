@@ -59,7 +59,7 @@ export function runSimulations(spec: BoardSpec, rootDir = process.cwd()): Simula
 
   for (const sim of spec.simulations) {
     const simFile = resolve(rootDir, sim.file)
-    const proc = spawnSync("tsci", ["simulate", "analog", simFile, sim.engine], {
+    const proc = spawnSync("tscircuit-cli", ["simulate", "analog", simFile, sim.engine], {
       cwd: rootDir,
       encoding: "utf8",
       timeout: 60_000,
