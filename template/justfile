@@ -1,0 +1,117 @@
+set shell := ["bash", "-euo", "pipefail", "-c"]
+
+entry := "src/boards/main.circuit.tsx"
+exports_dir := justfile_directory() / "dist/exports"
+routing_dir := justfile_directory() / "dist/routing"
+
+# Show available PCB commands
+default:
+    @just --list
+
+# Start live tscircuit Schematic / PCB / 3D UI (http://localhost:3020)
+dev port="3020":
+    tscircuit-cli dev --port {{ port }} {{ entry }}
+
+# Run TDD constraints, DRC, electrical/SI/PI/thermal & SPICE test suites
+test:
+    node --import tsx --test tests/*.test.ts
+
+# Run board checks & print grouped summary scorecard (writes dist/circuit.json & dist/checks-report.json)
+check:
+    tsx checks/index.ts
+
+# Print grouped summary from existing dist/checks-report.json without recompiling
+check-summary:
+    tsx checks/index.ts --summary
+
+# Search LCSC/JLCPCB parts concurrently (e.g. `just search "ESP32-C3" "AMS1117-3.3" "USBLC6"`)
+search +queries:
+    tsx scripts/search-parts.ts {{ queries }}
+
+# Format and auto-fix all supported files (treefmt covers TS/TSX/JS/JSON/MD/Nix/Shell/justfile)
+fmt:
+    @if command -v treefmt >/dev/null 2>&1; then treefmt; else biome check --write .; fi
+
+# Check formatting and lint rules across all supported files without modifying them
+lint:
+    @if command -v treefmt >/dev/null 2>&1; then treefmt --fail-on-change; else biome check .; fi
+
+# Full verification - TypeScript + formatting/lint + TDD tests
+verify:
+    tsc --noEmit
+
+    just lint
+    just test
+
+# Verify required & optional CLI tools (helpful for non-Nix setups)
+doctor:
+    @echo "Checking AgenticBoards toolchain:"
+    @for tool in node tscircuit-cli tsc tsx just treefmt biome ngspice kicad-cli freerouting; do \
+      if command -v "$tool" >/dev/null 2>&1; then \
+        printf "  [OK]      %-15s %s\n" "$tool" "$(command -v "$tool")"; \
+      else \
+        printf "  [MISSING] %-15s (install via Nix flake/shell.nix or your package manager)\n" "$tool"; \
+      fi; \
+    done
+
+# Export Schematic, PCB, and Assembly SVG renders
+export-renders:
+    mkdir -p "{{ exports_dir }}"
+
+    tscircuit-cli export -f schematic-svg -o "{{ exports_dir }}/schematic.svg" "{{ entry }}"
+    tscircuit-cli export -f pcb-svg -o "{{ exports_dir }}/pcb.svg" "{{ entry }}"
+    tscircuit-cli export -f assembly-svg -o "{{ exports_dir }}/assembly.svg" "{{ entry }}"
+
+# Export fabrication Gerbers + Excellon drill archive
+export-gerbers:
+    mkdir -p "{{ exports_dir }}"
+
+    tscircuit-cli export -f gerbers -o "{{ exports_dir }}/gerbers.zip" "{{ entry }}"
+
+# Export JLCPCB-compatible BOM CSV & Pick-and-Place CPL CSV
+export-pcba:
+    tsx scripts/export-pcba.ts
+
+# Export KiCad project archive, PCB, and schematic
+export-kicad:
+    mkdir -p "{{ exports_dir }}"
+
+    tscircuit-cli export -f kicad_zip -o "{{ exports_dir }}/kicad-project.zip" "{{ entry }}"
+    tscircuit-cli export -f kicad_pcb -o "{{ exports_dir }}/board.kicad_pcb" "{{ entry }}"
+    tscircuit-cli export -f kicad_sch -o "{{ exports_dir }}/board.kicad_sch" "{{ entry }}"
+
+# Export 3D CAD models (STEP + glTF) for mechanical enclosure checks
+export-3d:
+    mkdir -p "{{ exports_dir }}"
+
+    tscircuit-cli export -f step -o "{{ exports_dir }}/board.step" "{{ entry }}"
+    tscircuit-cli export -f gltf -o "{{ exports_dir }}/board.gltf" "{{ entry }}"
+
+# Export Specctra DSN (for external autorouters like Freerouting)
+export-dsn:
+    mkdir -p "{{ exports_dir }}"
+
+    tscircuit-cli export -f specctra-dsn -o "{{ exports_dir }}/board.dsn" "{{ entry }}"
+
+# Export human-readable netlist
+export-netlist:
+    mkdir -p "{{ exports_dir }}"
+
+    tscircuit-cli export -f readable-netlist -o "{{ exports_dir }}/netlist.txt" "{{ entry }}"
+
+# Independent KiCad CLI DRC cross-check on exported board.kicad_pcb (fails on errors/unconnected nets)
+kicad-drc: export-kicad
+    kicad-cli pcb drc --format json --output "{{ exports_dir }}/kicad-drc.json" "{{ exports_dir }}/board.kicad_pcb"
+
+    tsx scripts/check-kicad-drc.ts "{{ exports_dir }}/kicad-drc.json"
+
+# External autorouting via Specctra DSN -> Freerouting -> SES
+route passes="40": export-dsn
+    mkdir -p "{{ routing_dir }}"
+
+    freerouting -de "{{ exports_dir }}/board.dsn" -do "{{ routing_dir }}/board.ses" -mp {{ passes }}
+    @echo "Routed session written to {{ routing_dir }}/board.ses"
+
+# Full manufacturing & PCBA release bundle + independent KiCad CLI DRC gate
+export-all: verify export-renders export-gerbers export-pcba export-3d export-dsn export-netlist kicad-drc
+    @echo "All manufacturing exports and KiCad DRC checks passed -> dist/exports/"

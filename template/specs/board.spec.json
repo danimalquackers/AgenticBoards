@@ -1,0 +1,47 @@
+{
+  "projectName": "new-board",
+  "description": "Replace with your PCB requirements before designing the circuit.",
+  "revision": "0.1.0",
+  "entrypoint": "src/boards/main.circuit.tsx",
+  "dimensions": {
+    "maxWidthMm": 50,
+    "maxHeightMm": 50,
+    "layers": 2,
+    "copperWeightOz": 1
+  },
+  "mountingHoles": [],
+  "keepoutZones": [],
+  "fabRules": {
+    "fabHouse": "JLCPCB",
+    "minTraceWidthMm": 0.15,
+    "minClearanceMm": 0.15,
+    "minViaDrillMm": 0.3,
+    "minViaDiameterMm": 0.6,
+    "minEdgeClearanceMm": 0.3
+  },
+  "budget": {
+    "maxBomUsd": 20.0,
+    "estimatedFabUnitUsd": 2.0,
+    "targetQuantity": 5,
+    "bomCosts": {}
+  },
+  "powerRails": [],
+  "electrical": {
+    "groundNetName": "GND",
+    "requireGroundNet": false,
+    "maxDecouplingDistanceMm": 8.0,
+    "maxTraceTempRiseC": 10,
+    "allowedUnconnectedPins": [],
+    "requireFootprints": true,
+    "require3dModels": false
+  },
+  "signalIntegrity": {
+    "highSpeedNets": [],
+    "differentialPairs": [],
+    "maxDiffPairSkewMm": 0.5,
+    "maxTraceLengthMm": {}
+  },
+  "requiredComponents": [],
+  "requiredNets": [],
+  "simulations": []
+}

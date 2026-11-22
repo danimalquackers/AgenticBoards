@@ -1,0 +1,25 @@
+{
+  "name": "agentic-boards",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "TDD-driven PCB project powered by tscircuit, ngspice, KiCad CLI, and Freerouting.",
+  "dependencies": {
+    "@jscad/modeling": "^2.12.5",
+    "@tscircuit/checks": "^0.0.282",
+    "@tscircuit/math-utils": "0.0.39",
+    "circuit-json": "^0.0.552",
+    "circuit-json-to-connectivity-map": "^0.0.33",
+    "format-si-unit": "^0.0.12",
+    "react": "^19.1.0",
+    "three": "^0.179.1",
+    "tscircuit": "^0.0.3240",
+    "zod": "^3.25.67"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "@types/react": "^19.1.0",
+    "tsx": "^4.19.3",
+    "typescript": "^5.9.3"
+  }
+}

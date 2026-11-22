@@ -1,8 +1,14 @@
 {
   "$schema": "https://biomejs.dev/schemas/2.6.5/schema.json",
   "files": {
-    "ignoreUnknown": true,
-    "includes": ["src/**", "specs/**", "checks/**", "tests/**", "scripts/**"]
+    "ignoreUnknown": true
+  },
+  "assist": {
+    "actions": {
+      "source": {
+        "organizeImports": "on"
+      }
+    }
   },
   "formatter": {
     "enabled": true,
@@ -12,14 +18,30 @@
   },
   "javascript": {
     "formatter": {
-      "semicolons": "asNeeded"
+      "quoteStyle": "double",
+      "semicolons": "always",
+      "trailingCommas": "all"
     }
   },
   "linter": {
     "enabled": true,
     "rules": {
+      "correctness": {
+        "noUnusedImports": "error",
+        "noUnusedVariables": "error",
+        "noUnreachable": "error"
+      },
+      "style": {
+        "useConst": "error",
+        "useImportType": "error",
+        "useNodejsImportProtocol": "error",
+        "useTemplate": "error"
+      },
       "suspicious": {
-        "noExplicitAny": "off"
+        "noDebugger": "error",
+        "noDoubleEquals": "error",
+        "noExplicitAny": "off",
+        "noVar": "error"
       }
     }
   }

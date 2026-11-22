@@ -1,20 +1,7 @@
-# Dependencies (managed declaratively by Nix via linkNodeModulesHook)
+# Local tooling & Nix outputs
 node_modules/
-
-# Build & export artifacts
-dist/
-*.circuit.json
-*.dsn
-*.ses
-*.gbr
-*.drl
-
-# Direnv & Nix
 .direnv/
 result
 result-*
-
-# Logs & temporary files
 *.log
 .DS_Store
-.tsci/

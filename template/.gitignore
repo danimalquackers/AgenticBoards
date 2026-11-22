@@ -1,0 +1,20 @@
+# Dependencies
+node_modules/
+
+# Build & export artifacts
+dist/
+*.circuit.json
+*.dsn
+*.ses
+*.gbr
+*.drl
+
+# Direnv & Nix
+.direnv/
+result
+result-*
+
+# Logs & temporary files
+*.log
+.DS_Store
+.tsci/
