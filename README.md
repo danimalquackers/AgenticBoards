@@ -43,37 +43,30 @@ just verify
 
 ## How the Test-Driven Workflow Works
 
-Open your scaffolded project in your AI coding agent and describe the board you
-want to build. The bundled rules (`AGENTS.md`), skills (`.agents/skills/`), and
-Stop hook (`.agents/hooks.json`) enforce a strict test-driven hardware loop so
-constraints are never silently dropped as designs evolve:
+Open your scaffolded project in your AI coding agent and describe your board.
+`AGENTS.md`, `.agents/skills/`, and `.agents/hooks.json` enforce this loop so
+constraints stay verified as the design evolves:
 
-1. **Requirements Discovery & Clarifying Questions** — Before writing any
-   circuit code, the agent audits your prompt for missing mechanical, electrical,
-   power, interface, budget, and thermal constraints and asks clarifying
-   questions instead of guessing.
-2. **Model All Requirements as Failing Tests First** — Every constraint
-   (dimensions, layers, mounting holes, keepouts, BOM budget, power rails,
-   signal-integrity limits, SPICE assertions, and custom structural rules) is
-   encoded into `specs/board.spec.json` and `tests/board.constraints.test.ts`.
-   The agent runs `just test` first to confirm those new tests fail against the
-   unimplemented board, verifying every constraint is actively enforced.
-3. **Live Preview** — Once the spec and initial board outline are in
-   place, the agent launches `just dev` (`http://localhost:3020`). `tsci dev`
-   watches files and hot-reloads the Schematic, PCB, and 3D views on every save
-   so you can watch the board evolve live in your browser.
-4. **Incremental Fab-Ready Engineering & SPICE Proof** — Components are selected
-   with real LCSC/MPN part numbers, verified pinouts, footprints, 3D models, and
-   unit costs. Functional blocks live in `src/subcircuits/` (making large
-   additions or removals clean), with full support circuitry (ESD/reverse-polarity
-   protection, USB-C `5.1kΩ` CC pull-downs, decoupling, pull-ups, debug headers,
-   test points, silkscreen markings) and `ngspice` simulations iterated until
-   `just verify` passes with zero errors.
-5. **Per-Format Exports & Independent KiCad DRC Sign-Off** — Generate only the
-   outputs you need during iteration (`just export-renders`, `just export-3d`,
-   `just export-gerbers`), or run `just export-all` for the full manufacturing
-   bundle (Gerbers, JLCPCB BOM + Pick-and-Place CPL, KiCad project, STEP/glTF,
-   SVGs).
+```mermaid
+flowchart TD
+  A["`**Clarify Constraints**
+  *Dimensions, rails, I/O, budget, DFT*`"]
+  B["`**Spec & Failing Tests First**
+  *board.spec.json + constraints.test.ts — confirm just test fails*`"]
+  C["`**Live Preview**
+  *just dev at localhost:3020 — hot-reloads Schematic, PCB & 3D*`"]
+  D["`**Incremental Build**
+  *1–2 subcircuits at a time — real LCSC/MPN parts + SPICE*`"]
+  E{"`**Verification**
+  *just verify — typecheck, lint, DRC, PI/SI/thermal, SPICE*`"}
+  F["`**Export & Sign-Off**
+  *just export-all — Gerbers, BOM/PnP, KiCad DRC, STEP/glTF, bring-up guide*`"]
+
+  A --> B --> C --> D --> E
+  E -- "Errors" --> D
+  E -- "Pass" --> F
+  F -. "Design changes" .-> A
+```
 
 ---
 
