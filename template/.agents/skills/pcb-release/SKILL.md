@@ -18,6 +18,7 @@ Generate only what you need via `just` (run `just` to list all recipes):
 - `just export-kicad` — `kicad-project.zip`, `board.kicad_pcb`, `board.kicad_sch`
 - `just export-3d` — `board.step`, `board.gltf`
 - `just export-dsn` / `just export-netlist` — `board.dsn`, `netlist.txt`
+- `just export-test-guide` — `bringup-test-guide.md` (power-off short checks, test-point coordinate/voltage table, power-on sequence, SI probing notes, and SPICE baseline)
 
 ## 2. Optional External Autorouting (Freerouting)
 

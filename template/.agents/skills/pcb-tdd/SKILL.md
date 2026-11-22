@@ -34,6 +34,9 @@ or ambiguous:
 - **Signal Integrity & Environment**: High-speed/differential signals (USB D+/D-,
   Ethernet, RF, >20MHz SPI), noise-sensitive analog stages, ambient temperature
   or thermal dissipation constraints.
+- **Bring-Up & Testability (DFT)**: Confirm whether compact size restricts probe
+  pads or if dedicated test points (power rails, `GND`, key bring-up signals) and
+  a bench bring-up guide should be included.
 
 ## Phase 2: Model ALL Requirements as Tests First
 

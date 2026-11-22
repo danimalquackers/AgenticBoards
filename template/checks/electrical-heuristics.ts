@@ -3,6 +3,7 @@ import {
   type CircuitIndex,
   distanceMm,
   error,
+  isTestPoint,
   netRoutedLengthMm,
   routeSegments,
   warn,
@@ -319,6 +320,58 @@ function checkSilkscreen(idx: CircuitIndex): CheckFinding[] {
   return [];
 }
 
+function checkTestPointCoverage(idx: CircuitIndex, spec: BoardSpec): CheckFinding[] {
+  const findings: CheckFinding[] = [];
+  const testPoints = idx.sourceComponents.filter(isTestPoint);
+
+  const hasTestPointOnNet = (netId: string): boolean =>
+    testPoints.some((tp) => {
+      const ports = idx.portsByCompId.get(tp.source_component_id) ?? [];
+      return ports.some((p) => idx.connMap.areIdsConnected(p.source_port_id, netId));
+    });
+
+  if (spec.powerRails.length > 0) {
+    const gndNet = idx.netByName.get(spec.electrical.groundNetName);
+    if (gndNet && !hasTestPointOnNet(gndNet.source_net_id)) {
+      findings.push(
+        warn(
+          "electrical",
+          "dft.testpoint.missing_ground",
+          `Consider adding an accessible GND test point (${spec.electrical.groundNetName}) for bench bring-up.`,
+        ),
+      );
+    }
+
+    for (const rail of spec.powerRails) {
+      const railNet = idx.netByName.get(rail.net);
+      if (railNet && !hasTestPointOnNet(railNet.source_net_id)) {
+        findings.push(
+          warn(
+            "electrical",
+            "dft.testpoint.missing_rail",
+            `Power rail "${rail.net}" (${rail.nominalVoltageV}V) has no test point; consider adding a compact pad if space permits.`,
+          ),
+        );
+      }
+    }
+  }
+
+  for (const hsName of spec.signalIntegrity.highSpeedNets) {
+    const hsNet = idx.netByName.get(hsName);
+    if (hsNet && hasTestPointOnNet(hsNet.source_net_id)) {
+      findings.push(
+        warn(
+          "signal-integrity",
+          "dft.testpoint.on_high_speed_net",
+          `Test point attached to high-speed/RF net "${hsName}"; avoid stub test points on controlled-impedance lines.`,
+        ),
+      );
+    }
+  }
+
+  return findings;
+}
+
 /** Runs electrical, power-integrity, thermal (IPC-2221), and signal-integrity heuristics. */
 export function runElectricalHeuristics(idx: CircuitIndex, spec: BoardSpec): CheckFinding[] {
   const capacitors = idx.sourceComponents.filter((c) => c.ftype === "simple_capacitor");
@@ -331,5 +384,6 @@ export function runElectricalHeuristics(idx: CircuitIndex, spec: BoardSpec): Che
     ...checkFloatingPins(idx, spec),
     ...checkSignalIntegrity(idx, spec),
     ...checkSilkscreen(idx),
+    ...checkTestPointCoverage(idx, spec),
   ];
 }

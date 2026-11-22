@@ -70,6 +70,10 @@ export function writeJson(filePath: string, data: unknown): void {
   writeFileSync(filePath, `${JSON.stringify(data, null, 2)}\n`);
 }
 
+export function isTestPoint(comp: any): boolean {
+  return comp?.ftype === "simple_test_point" || /^TP(?:[_0-9]|$)/i.test(String(comp?.name ?? ""));
+}
+
 export function distanceMm(a: { x: number; y: number }, b: { x: number; y: number }): number {
   return Math.hypot(b.x - a.x, b.y - a.y);
 }

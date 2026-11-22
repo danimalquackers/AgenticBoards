@@ -42,13 +42,16 @@ All developer and agent workflows run through **`just`** (`just --list`).
      routing patterns instead of reading `node_modules`.
    - Include all production support circuitry: reverse-polarity/ESD protection, USB-C `5.1kΩ`
      CC1/CC2 pull-downs, bulk + per-IC `100nF` decoupling, pull-ups, crystal load caps, debug
-     header + power/GND test points, silkscreen labels/polarity marks, 4-layer GND planes for
+     header, moderate `<testpoint>` pads on `GND` and primary power rails (never on high-speed
+     diff pairs or RF feeds), silkscreen labels/polarity marks, 4-layer GND planes for
      high-speed signals, and IPC-2221 thermal/ampacity margins.
    - Prove critical power and analog behavior with `ngspice` simulations in `src/simulations/`.
 
-5. **Per-Format Exports & Manufacturing Sign-Off (`pcb-release` skill)**:
+5. **Per-Format Exports, Docs & Manufacturing Sign-Off (`pcb-release` skill)**:
    - Use targeted `just` recipes during iteration (`just export-renders`, `just export-3d`,
-     `just export-gerbers`, `just export-pcba`, `just export-kicad`, `just route`).
+     `just export-gerbers`, `just export-pcba`, `just export-kicad`, `just export-test-guide`,
+     `just route`).
    - A board is only complete after `just export-all` (which runs `just verify`, all exports,
-     and `just kicad-drc`) passes with zero errors and zero unconnected nets, and you have
-     visually verified the live preview at `http://localhost:3020`.
+     `dist/exports/bringup-test-guide.md`, and `just kicad-drc`) passes with zero errors and
+     zero unconnected nets, and you have visually verified the live preview at
+     `http://localhost:3020`.

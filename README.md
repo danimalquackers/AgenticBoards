@@ -125,9 +125,10 @@ dependencies and metadata only):
 | `just export-kicad`                       | Export `kicad-project.zip`, `board.kicad_pcb`, `board.kicad_sch`                         |
 | `just export-3d`                          | Export 3D CAD models (`board.step`, `board.gltf`)                                        |
 | `just export-dsn` / `just export-netlist` | Export Specctra `board.dsn` / human-readable `netlist.txt`                               |
+| `just export-test-guide`                  | Export `bringup-test-guide.md` (short checks, test-point map, voltage/SI reference)      |
 | `just kicad-drc`                          | Run independent `kicad-cli pcb drc` gate on `board.kicad_pcb`                            |
 | `just route`                              | Export Specctra DSN and run headless `freerouting` → `dist/routing/board.ses`            |
-| `just export-all`                         | Run `verify`, all per-format exports, and `kicad-drc` for release sign-off               |
+| `just export-all`                         | Run `verify`, all exports, bring-up guide, and `kicad-drc` for release sign-off          |
 
 ---
 
@@ -139,8 +140,7 @@ Run `create-agentic-board --help` for full usage (powered by `commander`):
 create-agentic-board [project-dir] [options]
   --no-nix       Omit Nix and direnv files (flake.nix, shell.nix, treefmt.nix, .envrc)
   --no-git       Skip `git init && git add -A`
-  --install      Force running `npm install --legacy-peer-deps`
-  --no-install   Skip running `npm install` even when not using Nix
+  --no-install   Skip running `npm install --legacy-peer-deps`
   -V, --version  Output the version number
   -h, --help     Display help
 ```

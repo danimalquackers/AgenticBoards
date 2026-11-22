@@ -99,6 +99,10 @@ export-netlist:
 
     tscircuit-cli export -f readable-netlist -o "{{ exports_dir }}/netlist.txt" "{{ entry }}"
 
+# Export bench bring-up & voltage/signal verification guide (dist/exports/bringup-test-guide.md)
+export-test-guide:
+    tsx scripts/export-test-guide.ts
+
 # Independent KiCad CLI DRC cross-check on exported board.kicad_pcb (fails on errors/unconnected nets)
 kicad-drc: export-kicad
     kicad-cli pcb drc --format json --output "{{ exports_dir }}/kicad-drc.json" "{{ exports_dir }}/board.kicad_pcb"
@@ -112,6 +116,6 @@ route passes="40": export-dsn
     freerouting -de "{{ exports_dir }}/board.dsn" -do "{{ routing_dir }}/board.ses" -mp {{ passes }}
     @echo "Routed session written to {{ routing_dir }}/board.ses"
 
-# Full manufacturing & PCBA release bundle + independent KiCad CLI DRC gate
-export-all: verify export-renders export-gerbers export-pcba export-3d export-dsn export-netlist kicad-drc
-    @echo "All manufacturing exports and KiCad DRC checks passed -> dist/exports/"
+# Full manufacturing & PCBA release bundle + bring-up guide + independent KiCad CLI DRC gate
+export-all: verify export-renders export-gerbers export-pcba export-3d export-dsn export-netlist export-test-guide kicad-drc
+    @echo "All manufacturing exports, bring-up test guide, and KiCad DRC checks passed -> dist/exports/"
