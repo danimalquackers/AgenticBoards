@@ -30,6 +30,7 @@ export const PowerRailSchema = z.object({
   maxCurrentA: z.number().nonnegative(),
   minTraceWidthMm: z.number().positive().optional(),
   requiresDecoupling: z.boolean().default(true),
+  notes: z.string().optional(),
 });
 
 export const BomEntrySchema = z.object({

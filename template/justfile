@@ -24,9 +24,10 @@ check:
 check-summary:
     tsx checks/index.ts --summary
 
-# Search LCSC/JLCPCB parts concurrently (e.g. `just search "ESP32-C3" "AMS1117-3.3" "USBLC6"`)
+# Search LCSC/JLCPCB parts concurrently (e.g. `just search "ESP32-C3" "TYPE-C 24P" "USBLC6"`)
+[positional-arguments]
 search +queries:
-    tsx scripts/search-parts.ts {{ queries }}
+    tsx scripts/search-parts.ts "$@"
 
 # Format and auto-fix all supported files (treefmt covers TS/TSX/JS/JSON/MD/Nix/Shell/justfile)
 fmt:
@@ -72,13 +73,14 @@ export-gerbers:
 export-pcba:
     tsx scripts/export-pcba.ts
 
-# Export KiCad project archive, PCB, and schematic
+# Export KiCad project archive, PCB, schematic, and fab-aligned .kicad_pro design rules
 export-kicad:
     mkdir -p "{{ exports_dir }}"
 
     tscircuit-cli export -f kicad_zip -o "{{ exports_dir }}/kicad-project.zip" "{{ entry }}"
     tscircuit-cli export -f kicad_pcb -o "{{ exports_dir }}/board.kicad_pcb" "{{ entry }}"
     tscircuit-cli export -f kicad_sch -o "{{ exports_dir }}/board.kicad_sch" "{{ entry }}"
+    tsx scripts/sync-kicad-project.ts "{{ exports_dir }}/board.kicad_pro"
 
 # Export 3D CAD models (STEP + glTF) for mechanical enclosure checks
 export-3d:
@@ -103,18 +105,15 @@ export-netlist:
 export-test-guide:
     tsx scripts/export-test-guide.ts
 
-# Independent KiCad CLI DRC cross-check on exported board.kicad_pcb (fails on errors/unconnected nets)
+# Independent KiCad CLI DRC cross-check on exported board.kicad_pcb (refills zones, applies fabRules, fails on errors/unconnected nets)
 kicad-drc: export-kicad
-    kicad-cli pcb drc --format json --output "{{ exports_dir }}/kicad-drc.json" "{{ exports_dir }}/board.kicad_pcb"
+    kicad-cli pcb drc --refill-zones --save-board --format json --output "{{ exports_dir }}/kicad-drc.json" "{{ exports_dir }}/board.kicad_pcb"
 
     tsx scripts/check-kicad-drc.ts "{{ exports_dir }}/kicad-drc.json"
 
-# External autorouting via Specctra DSN -> Freerouting -> SES
+# External autorouting via Specctra DSN -> Freerouting -> SES (with DSN padstack repair & error checks)
 route passes="40": export-dsn
-    mkdir -p "{{ routing_dir }}"
-
-    freerouting -de "{{ exports_dir }}/board.dsn" -do "{{ routing_dir }}/board.ses" -mp {{ passes }}
-    @echo "Routed session written to {{ routing_dir }}/board.ses"
+    tsx scripts/freeroute.ts "{{ exports_dir }}/board.dsn" "{{ routing_dir }}/board.ses" "{{ passes }}"
 
 # Full manufacturing & PCBA release bundle + bring-up guide + independent KiCad CLI DRC gate
 export-all: verify export-renders export-gerbers export-pcba export-3d export-dsn export-netlist export-test-guide kicad-drc

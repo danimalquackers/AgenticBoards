@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import React from "react";
@@ -75,6 +75,35 @@ export async function compileBoard(entrypoint: string): Promise<any[]> {
   circuit.add(React.createElement(Component));
   await circuit.renderUntilSettled();
   return circuit.getCircuitJson();
+}
+
+function newestMtimeMs(path: string): number {
+  if (!existsSync(path)) return 0;
+  const st = statSync(path);
+  if (!st.isDirectory()) return st.mtimeMs;
+
+  let latest = st.mtimeMs;
+  for (const entry of readdirSync(path, { withFileTypes: true })) {
+    latest = Math.max(latest, newestMtimeMs(resolve(path, entry.name)));
+  }
+  return latest;
+}
+
+/** Reuses `dist/circuit.json` when newer than `src/` and `specs/`, otherwise compiles the board. */
+export async function loadOrCompileCircuit(entrypoint: string): Promise<any[]> {
+  const cachedPath = resolve(process.cwd(), "dist/circuit.json");
+  if (existsSync(cachedPath)) {
+    const cachedMtime = statSync(cachedPath).mtimeMs;
+    const latestSource = Math.max(
+      newestMtimeMs(resolve(process.cwd(), "src")),
+      newestMtimeMs(resolve(process.cwd(), "specs")),
+    );
+    if (cachedMtime >= latestSource) {
+      return JSON.parse(readFileSync(cachedPath, "utf8")) as any[];
+    }
+  }
+
+  return compileBoard(entrypoint);
 }
 
 export async function runAllBoardChecks(specPath = "specs/board.spec.json"): Promise<CheckReport> {

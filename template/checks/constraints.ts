@@ -1,5 +1,5 @@
 import type { BoardSpec } from "../specs/board-spec.schema";
-import { type CircuitIndex, error, warn } from "./circuit-index";
+import { type CircuitIndex, error, isTestPoint, warn } from "./circuit-index";
 import type { BoardMetrics, BomSummary, CheckFinding } from "./types";
 
 export interface ConstraintCheckOutput {
@@ -147,18 +147,17 @@ function checkKeepoutZones(idx: CircuitIndex, spec: BoardSpec): CheckFinding[] {
     const zMaxY = zone.yMm + zone.heightMm / 2;
     const zoneLayers = new Set<string>(zone.layers);
     const appliesToAll = zoneLayers.has("all");
+    const layerMatches = (layer: string) => appliesToAll || zoneLayers.has(layer);
+    const boxOverlaps = (x: number, y: number, hw: number, hh: number) =>
+      x + hw > zMinX && x - hw < zMaxX && y + hh > zMinY && y - hh < zMaxY;
 
     for (const comp of idx.pcbComponents) {
       const compLayer = typeof comp.layer === "string" ? comp.layer : "top";
-      if (!appliesToAll && !zoneLayers.has(compLayer)) continue;
+      if (!layerMatches(compLayer)) continue;
 
       const cx = comp.center?.x ?? 0;
       const cy = comp.center?.y ?? 0;
-      const hw = (comp.width ?? 0) / 2;
-      const hh = (comp.height ?? 0) / 2;
-      const overlaps = cx + hw > zMinX && cx - hw < zMaxX && cy + hh > zMinY && cy - hh < zMaxY;
-
-      if (overlaps) {
+      if (boxOverlaps(cx, cy, (comp.width ?? 0) / 2, (comp.height ?? 0) / 2)) {
         findings.push(
           error(
             "mechanical",
@@ -166,6 +165,46 @@ function checkKeepoutZones(idx: CircuitIndex, spec: BoardSpec): CheckFinding[] {
             `Component ${comp.source_component_id ?? comp.pcb_component_id} (${compLayer}) overlaps keepout zone "${zone.name}".`,
           ),
         );
+      }
+    }
+
+    for (const via of idx.pcbVias) {
+      const r = (via.outer_diameter ?? 0) / 2;
+      if (
+        typeof via.x === "number" &&
+        typeof via.y === "number" &&
+        boxOverlaps(via.x, via.y, r, r)
+      ) {
+        findings.push(
+          error(
+            "mechanical",
+            "mechanical.keepout.via",
+            `Via ${via.pcb_via_id} intrudes into keepout zone "${zone.name}".`,
+          ),
+        );
+      }
+    }
+
+    for (const trace of idx.pcbTraces) {
+      for (const seg of trace.route ?? []) {
+        const layer = typeof seg?.layer === "string" ? seg.layer : "top";
+        if (!layerMatches(layer)) continue;
+
+        const r = typeof seg?.width === "number" ? seg.width / 2 : 0;
+        if (
+          typeof seg?.x === "number" &&
+          typeof seg?.y === "number" &&
+          boxOverlaps(seg.x, seg.y, r, r)
+        ) {
+          findings.push(
+            error(
+              "mechanical",
+              "mechanical.keepout.trace",
+              `Trace ${trace.pcb_trace_id} (${layer}) intrudes into keepout zone "${zone.name}".`,
+            ),
+          );
+          break;
+        }
       }
     }
   }
@@ -398,7 +437,9 @@ function evaluateBom(
   const unpricedDesignators: string[] = [];
   const missingPartNums: string[] = [];
 
-  for (const sc of idx.sourceComponents) {
+  const bomComponents = idx.sourceComponents.filter((sc) => !isTestPoint(sc));
+
+  for (const sc of bomComponents) {
     const name = String(sc.name ?? "");
     const entry = spec.budget.bomCosts[name];
 
@@ -461,7 +502,7 @@ function evaluateBom(
   return {
     findings,
     bom: {
-      totalComponents: idx.sourceComponents.length,
+      totalComponents: bomComponents.length,
       pricedComponents,
       unpricedDesignators,
       bomCostUsd: Number(bomCostUsd.toFixed(4)),

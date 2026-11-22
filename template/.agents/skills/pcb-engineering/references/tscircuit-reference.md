@@ -28,6 +28,7 @@ Keep `<board>` routing tolerances aligned with `specs/board.spec.json -> fabRule
 ```
 
 - `PcbStyle` supports `viaHoleDiameter` and `viaPadDiameter` (set trace widths via `defaultTraceWidth` / `minTraceWidth` on `<board>` or `thickness` on `<trace>`).
+- Set `minBoardEdgeClearance` at least `0.05 mm` larger than `fabRules.minEdgeClearanceMm` (e.g., `0.35mm` for a `0.30mm` fab rule) to avoid exact-boundary floating-point edge-clearance errors.
 
 ## Semantic Components (Avoid `<chip>` Warning Floods)
 
@@ -42,7 +43,7 @@ Use the matching JSX primitive to prevent `source_refdes_convention_warning` and
 
 ## Custom Footprints
 
-- Always include a `<courtyard>` (or `<silkscreenpath>` + `courtyard`) inside custom `<footprint>` JSX so `tscircuit` checks courtyard overlaps accurately without emitting `pcb_component_missing_courtyard_warning`.
+- Always include a `<courtyardrect>` inside custom `<footprint>` JSX (`<courtyard>` is not a valid element name) so `tscircuit` checks courtyard overlaps accurately without emitting `pcb_component_missing_courtyard_warning`.
 - Add stable `key` props when mapping `<smtpad>` arrays in React to keep test logs clean.
 - Attach `<cadmodel>` (or standard footprinter strings like `"0402"`, `"0603"`, `"sot23"`, `"qfn32_p0.5_w5_h5"`) so 3D previews and STEP/glTF exports include component bodies.
 

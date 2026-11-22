@@ -39,6 +39,7 @@ in
       "dist/**"
       "node_modules/**"
       ".direnv/**"
+      ".tscircuit/**"
     ];
     formatter = {
       shellcheck.priority = 1;
