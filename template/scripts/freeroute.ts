@@ -61,10 +61,25 @@ if (patched.length > 0) {
 
 mkdirSync(dirname(sesPath), { recursive: true });
 
-const proc = spawnSync("freerouting", ["-de", dsnPath, "-do", sesPath, "-mp", passes], {
-  encoding: "utf8",
-  timeout: 180_000,
-});
+const proc = spawnSync(
+  "freerouting",
+  [
+    "--gui.enabled=false",
+    "-de",
+    dsnPath,
+    "-do",
+    sesPath,
+    `--router.autorouter.max_passes=${passes}`,
+  ],
+  {
+    encoding: "utf8",
+    timeout: 180_000,
+    env: {
+      ...process.env,
+      JAVA_TOOL_OPTIONS: `${process.env.JAVA_TOOL_OPTIONS ?? ""} -Djava.awt.headless=true`.trim(),
+    },
+  },
+);
 
 const combined = `${proc.stdout ?? ""}\n${proc.stderr ?? ""}`;
 const parseFailed =
