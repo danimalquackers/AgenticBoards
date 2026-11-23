@@ -43,8 +43,10 @@ generates all deliverables in `dist/exports/`, and executes `just kicad-drc`
 
 Inspect `dist/exports/kicad-drc.json` for any remaining warnings, optionally run
 `tsci quote` for fab pricing, and do a final visual sign-off in the live preview
-at `http://localhost:3020` (`just dev`) in your browser if possible for silkscreen legibility,
-polarity marks, connector alignment, and 3D clearances.
+at `http://localhost:3020` (`just dev`) and `dist/exports/schematic.svg` / `pcb.svg`
+for **schematic clarity** (compact grouping, left-to-right flow, no scattered parts or
+overlapping net labels), silkscreen legibility, polarity marks, connector alignment,
+and 3D clearances.
 
 ## 4. Independent Expert Verifier Subagent (`pcb-review`)
 

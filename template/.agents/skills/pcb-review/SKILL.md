@@ -21,7 +21,7 @@ Keep the handoff **unbiased**:
    - The user's **original requirements** (and any explicit user answers/changes).
    - Paths to the board artifacts (`specs/board.spec.json`, `tests/`, `src/`,
      `dist/checks-report.json`, `dist/exports/kicad-drc.json`, `dist/exports/bom.csv`,
-     and `dist/exports/bringup-test-guide.md`).
+     `dist/exports/schematic.svg`, `dist/exports/pcb.svg`, and `dist/exports/bringup-test-guide.md`).
 2. **Do not** pass the author's design rationale, justifications, or "known minor issues"
    framing — let the verifier evaluate the board strictly on its own merits.
 3. Instruct the verifier to **report findings only** and make zero file edits.
@@ -89,6 +89,10 @@ Audit every subsystem against the researched specs:
   (flag placeholder part numbers, unverified rotations, or test-point BOM clutter).
 - Flag dead code, unused nets, contradictory comments, copy-pasted mismatches, and
   inaccurate or incomplete checks in `dist/exports/bringup-test-guide.md`.
+- Inspect visual reviewability (`dist/exports/schematic.svg`, `pcb.svg`, and `dist/checks-report.json`
+  schematic warnings): flag overly spread-out or disorganized schematics, overlapping net
+  labels (`schematic_component_styling_warning`), missing logical block grouping, or
+  unreadable silkscreen.
 
 ---
 

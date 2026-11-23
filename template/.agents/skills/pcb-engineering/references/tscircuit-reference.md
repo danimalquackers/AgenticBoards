@@ -53,6 +53,16 @@ Use the matching JSX primitive to prevent `source_refdes_convention_warning` and
 - **High-current power buses**: Use `<trace from=".J1 > .VBUS" to=".U1 > .VIN" thickness="0.5mm" />` (or explicit `pcbPath={[{ x, y }, ...]}`) so the autorouter keeps the full bus width.
 - **Length-matched differential pairs**: Place source and destination pads aligned on the same axis and provide symmetric `pcbPath` waypoints on `<trace>` for zero skew.
 
+## Human-Readable Schematic Layout
+
+Do not leave schematic placement to default auto-layout — it scatters components across a huge canvas and creates overlapping net labels. Lay out schematics intentionally for human review:
+
+- **Flow left-to-right by functional block**: Wrap each subcircuit in a `<group name="..." schX={...} schY={...}>` arranged logically (e.g., Connectors/Input on the left, Power & Protection in the middle-left, MCU/Core in the center, Peripherals & Debug/Test Points on the right).
+- **Compact local grid**: Set explicit `schX` and `schY` on components within each block (~2–3 units apart, aligned on clean rows/columns) instead of sprawling across dozens of units.
+- **Standard symbol orientation**: Rotate decoupling capacitors and pull-downs vertically (`schRotation={90}` or `-90`) with power up and `GND` down.
+- **Order IC/connector pins cleanly**: Use `schPinArrangement` on `<chip>` / `<connector>` so power pins sit on `topSide`, `GND` on `bottomSide`, inputs on `leftSide`, and outputs on `rightSide`.
+- **Avoid rat's-nest wires**: Connect distant blocks via named nets (`net.V3V3`, `net.GND`) rather than long crossing wires, and resolve all `schematic_component_styling_warning` label overlaps.
+
 ## SPICE Testbenches (`ngspice`)
 
 Place simulation files in `src/simulations/<name>.sim.circuit.tsx` and declare assertions in `specs/board.spec.json -> simulations[]`:

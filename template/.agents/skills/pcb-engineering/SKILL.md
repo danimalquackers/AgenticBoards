@@ -44,6 +44,8 @@ the supporting components required for reliable Rev-1 hardware.
   - **4-layer stackup** (`Sig/GND/PWR/Sig`) for USB, RF, Ethernet, >20MHz SPI/clocks, or sensitive analog; keep ground plane unbroken and match differential pairs (`<= maxDiffPairSkewMm`).
   - Size power traces per IPC-2221 (`checks/electrical-heuristics.ts` enforces ampacity). Switch LDO -> buck if `P_diss > 0.5W`; add thermal vias under hot QFN/SOT-223 pads.
   - Maintain copper-to-edge clearance (`>= 0.3mm`), mounting-hole screw-head keepouts, clear silkscreen (board name/rev, connector pinouts, pin-1/polarity marks), and fiducials for fine-pitch QFN/BGA parts.
+- **Human-Readable Schematic & Reviewability**:
+  - Lay out schematics intentionally for human engineers (not just fab DRC): group functional blocks left-to-right with compact `schX`/`schY` coordinates, orient power up / `GND` down, arrange multi-pin IC/connector pins via `schPinArrangement`, and eliminate `schematic_component_styling_warning` label overlaps. See `references/tscircuit-reference.md`.
 
 ## 3. Provable SPICE Simulation (`ngspice`)
 
