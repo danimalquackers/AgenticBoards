@@ -59,8 +59,8 @@ flowchart TD
   *1–2 subcircuits at a time — real LCSC/MPN parts + SPICE*`"]
   E{"`**Verification**
   *just verify — typecheck, lint, DRC, PI/SI/thermal, SPICE*`"}
-  F["`**Export & Sign-Off**
-  *just export-all — Gerbers, BOM/PnP, KiCad DRC, STEP/glTF, bring-up guide*`"]
+  F["`**Export & Independent Review**
+  *just export-all + pcb-review verifier subagent*`"]
 
   A --> B --> C --> D --> E
   E -- "Errors" --> D

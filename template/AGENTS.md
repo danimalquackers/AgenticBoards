@@ -47,11 +47,12 @@ All developer and agent workflows run through **`just`** (`just --list`).
      high-speed signals, and IPC-2221 thermal/ampacity margins.
    - Prove critical power and analog behavior with `ngspice` simulations in `src/simulations/`.
 
-5. **Per-Format Exports, Docs & Manufacturing Sign-Off (`pcb-release` skill)**:
+5. **Per-Format Exports, Docs & Independent Verification (`pcb-release` & `pcb-review` skills)**:
    - Use targeted `just` recipes during iteration (`just export-renders`, `just export-3d`,
      `just export-gerbers`, `just export-pcba`, `just export-kicad`, `just export-test-guide`,
      `just route`).
-   - A board is only complete after `just export-all` (which runs `just verify`, all exports,
-     `dist/exports/bringup-test-guide.md`, and `just kicad-drc`) passes with zero errors and
-     zero unconnected nets, and you have visually verified the live preview at
-     `http://localhost:3020`.
+   - Run `just export-all` (which runs `just verify`, all exports, `dist/exports/bringup-test-guide.md`,
+     and `just kicad-drc`) until it passes with zero errors and zero unconnected nets.
+   - Before declaring the board complete, launch an **independent verifier subagent** using the
+     `pcb-review` skill to audit the design against original requirements, electrical/protocol
+     standards, and anti-slop checks, and visually verify the live preview at `http://localhost:3020`.

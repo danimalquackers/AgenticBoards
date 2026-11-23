@@ -45,3 +45,11 @@ Inspect `dist/exports/kicad-drc.json` for any remaining warnings, optionally run
 `tsci quote` for fab pricing, and do a final visual sign-off in the live preview
 at `http://localhost:3020` (`just dev`) in your browser if possible for silkscreen legibility,
 polarity marks, connector alignment, and 3D clearances.
+
+## 4. Independent Expert Verifier Subagent (`pcb-review`)
+
+Before presenting the finished board to the user, launch a fresh, read-only verifier
+subagent with the `pcb-review` skill to audit the design against the original user
+requirements, relevant electrical/protocol specifications (USB-C/PD/USB4, RF, power/LiPo,
+digital buses), BOM/fab realism, and `dist/exports/bringup-test-guide.md`. Fix any
+blocking defects reported and re-run `just export-all` before sign-off.

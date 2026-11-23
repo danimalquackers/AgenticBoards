@@ -75,4 +75,4 @@ dependencies only):
 - `checks/` & `tests/` — Automated DRC, edge clearance, unrouted trace, BOM budget, IPC-2221 ampacity, diff-pair skew, and SPICE suites
 - `scripts/export-pcba.ts` — JLCPCB BOM & Pick-and-Place CPL exporter
 - `treefmt.nix` & `biome.json` — Polyglot formatting & strict linting rules (`.ts`/`.tsx`/`.js`/`.json`/`.md`/`.nix`/`.sh`/`justfile`)
-- `.agents/` — Agent-agnostic skills (`pcb-tdd`, `pcb-engineering`, `pcb-release`) & Stop verification hook
+- `.agents/` — Agent-agnostic skills (`pcb-tdd`, `pcb-engineering`, `pcb-release`, `pcb-review`) & Stop verification hook
