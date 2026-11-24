@@ -90,9 +90,10 @@ Audit every subsystem against the researched specs:
 - Flag dead code, unused nets, contradictory comments, copy-pasted mismatches, and
   inaccurate or incomplete checks in `dist/exports/bringup-test-guide.md`.
 - Inspect visual reviewability (`dist/exports/schematic.svg`, `pcb.svg`, and `dist/checks-report.json`
-  schematic warnings): flag overly spread-out or disorganized schematics, overlapping net
-  labels (`schematic_component_styling_warning`), missing logical block grouping, or
-  unreadable silkscreen.
+  schematic warnings): flag schematics missing `<schematicsheet>` or titled `<schematicbox>`
+  functional groupings, randomly scattered or sprawling layouts (extreme aspect ratio),
+  missing `<netlabel>`s / design notes, overlapping net labels (`schematic_component_styling_warning`),
+  or unreadable silkscreen.
 
 ---
 

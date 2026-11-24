@@ -15,5 +15,7 @@ export default () => (
     minBoardEdgeClearance="0.35mm"
     minTraceToPadEdgeClearance="0.15mm"
     pcbStyle={{ viaHoleDiameter: "0.3mm", viaPadDiameter: "0.6mm" }}
-  />
+  >
+    <schematicsheet name="main" displayName="Main Schematic" sheetSize="A4" />
+  </board>
 );

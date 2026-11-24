@@ -28,6 +28,9 @@ export interface CircuitIndex {
   sourcePorts: any[];
   pcbPorts: any[];
   silkTexts: any[];
+  schematicComponents: any[];
+  schematicBoxes: any[];
+  schematicSheets: any[];
   netByName: Map<string, any>;
   compById: Map<string, any>;
   pcbBySourceId: Map<string, any>;
@@ -146,6 +149,9 @@ export function indexCircuit(circuitJson: any[]): CircuitIndex {
     sourcePorts: [] as any[],
     pcbPorts: [] as any[],
     silkTexts: [] as any[],
+    schematicComponents: [] as any[],
+    schematicBoxes: [] as any[],
+    schematicSheets: [] as any[],
   };
 
   const bucketByType: Record<string, any[]> = {
@@ -162,6 +168,9 @@ export function indexCircuit(circuitJson: any[]): CircuitIndex {
     source_port: buckets.sourcePorts,
     pcb_port: buckets.pcbPorts,
     pcb_silkscreen_text: buckets.silkTexts,
+    schematic_component: buckets.schematicComponents,
+    schematic_box: buckets.schematicBoxes,
+    schematic_sheet: buckets.schematicSheets,
   };
 
   let pcbBoard: any;

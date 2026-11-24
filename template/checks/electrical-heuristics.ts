@@ -383,6 +383,55 @@ function checkTestPointCoverage(idx: CircuitIndex, spec: BoardSpec): CheckFindin
   return findings;
 }
 
+function checkSchematicLayout(idx: CircuitIndex): CheckFinding[] {
+  if (idx.sourceComponents.length === 0) return [];
+
+  const findings: CheckFinding[] = [];
+
+  if (idx.schematicSheets.length === 0) {
+    findings.push(
+      warn(
+        "drc",
+        "schematic.sheet.missing",
+        'Add a <schematicsheet name="main" sheetSize="A4" /> frame so the schematic renders as a structured engineering sheet.',
+      ),
+    );
+  }
+
+  if (idx.sourceComponents.length >= 6 && idx.schematicBoxes.length === 0) {
+    findings.push(
+      warn(
+        "drc",
+        "schematic.boxes.missing",
+        'Group functional blocks with titled <schematicbox title="..." strokeStyle="dashed" overlay={[...]} /> boxes for human review.',
+      ),
+    );
+  }
+
+  const placed = idx.schematicComponents.filter(
+    (c) => typeof c?.center?.x === "number" && typeof c?.center?.y === "number",
+  );
+  if (placed.length >= 6) {
+    const xs = placed.map((c) => c.center.x as number);
+    const ys = placed.map((c) => c.center.y as number);
+    const spanX = Math.max(...xs) - Math.min(...xs);
+    const spanY = Math.max(...ys) - Math.min(...ys);
+    const ratio = spanX > 0 && spanY > 0 ? Math.max(spanX / spanY, spanY / spanX) : 0;
+
+    if (ratio > 4.0) {
+      findings.push(
+        warn(
+          "drc",
+          "schematic.layout.aspect_ratio",
+          `Schematic bounding box is ${spanX.toFixed(1)}x${spanY.toFixed(1)} (${ratio.toFixed(1)}:1 aspect ratio); arrange functional blocks in a compact rectangular grid.`,
+        ),
+      );
+    }
+  }
+
+  return findings;
+}
+
 /** Runs electrical, power-integrity, thermal (IPC-2221), and signal-integrity heuristics. */
 export function runElectricalHeuristics(idx: CircuitIndex, spec: BoardSpec): CheckFinding[] {
   const capacitors = idx.sourceComponents.filter((c) => c.ftype === "simple_capacitor");
@@ -396,5 +445,6 @@ export function runElectricalHeuristics(idx: CircuitIndex, spec: BoardSpec): Che
     ...checkSignalIntegrity(idx, spec),
     ...checkSilkscreen(idx),
     ...checkTestPointCoverage(idx, spec),
+    ...checkSchematicLayout(idx),
   ];
 }
