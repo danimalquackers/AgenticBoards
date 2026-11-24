@@ -62,6 +62,8 @@ export function loadSpec(specPath = "specs/board.spec.json"): BoardSpec {
   return BoardSpecSchema.parse(raw);
 }
 
+const DEFAULT_COMPILE_TIMEOUT_MS = 180_000;
+
 export async function compileBoard(entrypoint: string): Promise<any[]> {
   const modPath = resolve(process.cwd(), entrypoint);
   const mod = await import(`${pathToFileURL(modPath).href}?t=${Date.now()}`);
@@ -71,9 +73,29 @@ export async function compileBoard(entrypoint: string): Promise<any[]> {
     throw new Error(`Entrypoint ${entrypoint} must default-export a React component function.`);
   }
 
+  const timeoutMs = Number(process.env.AUTOROUTE_TIMEOUT_MS ?? DEFAULT_COMPILE_TIMEOUT_MS);
   const circuit = new Circuit();
   circuit.add(React.createElement(Component));
-  await circuit.renderUntilSettled();
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      circuit.renderUntilSettled(),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          reject(
+            new Error(
+              `Board compile/autoroute timed out after ${Math.round(timeoutMs / 1000)}s. ` +
+                "Check for `<copperpour unbroken />` blocking an inner routing layer or overly tight clearances (override via AUTOROUTE_TIMEOUT_MS).",
+            ),
+          );
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+
   return circuit.getCircuitJson();
 }
 

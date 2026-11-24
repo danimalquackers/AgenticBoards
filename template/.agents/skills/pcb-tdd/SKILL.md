@@ -73,13 +73,14 @@ are written in `src/boards/main.circuit.tsx`:
 2. Open `http://localhost:3020` in your agent's browser tool (if available) or
    let the user know it is ready to view so they can watch every iteration live.
 
-## Phase 4: Incremental Placement-First Design Until Every Check Passes
+## Phase 4: Incremental Placement
 
-1. Build and wire **1 to 2 subcircuits at a time** (outline + connectors + mounting holes -> power stage -> core IC -> peripherals -> silkscreen/polish). Do not dump dozens of unverified components in one pass.
-2. Put each functional block in `src/subcircuits/<Block>.tsx` inside a `<group>` and compose them in `src/boards/main.circuit.tsx` with `autorouter="auto-local"` and `pcbStyle` / `RoutingTolerances` matching `specs/board.spec.json -> fabRules`.
-3. Run `just check` (or `just test`) after each subcircuit and resolve all placement/courtyard overlaps before adding the next block. Use `just check-summary` to inspect the grouped error summary without reading raw `dist/checks-report.json`.
-4. **Avoid micro-nudging loops**: If `auto-local` still fails DRC after 3 to 5 targeted placement adjustments, stop nudging coordinates by 0.2 mm. Re-architect the crowded zone (move parts to the opposite layer, rotate ICs to uncross pinouts, or widen routing channels) or run `just route` (Freerouting).
-5. Run `just verify` before finishing. Never weaken tests or bypass DRC with `--ignore-*-drc` or `drcChecksDisabled`.
+1. **Pre-Layout BOM & Mechanical Review (Before Routing)**: Before placing traces, verify every active IC, connector, and protection part has a real, orderable LCSC/MPN SKU whose pin count, voltage rating, and physical Z-height match the datasheet and enclosure. Never invent simplified footprints for real modules or connectors.
+2. Build and wire **1 to 2 subcircuits at a time** (outline + connectors + mounting holes -> power stage -> core IC -> peripherals -> silkscreen/polish). Do not dump dozens of unverified components in one pass.
+3. Put each functional block in `src/subcircuits/<Block>.tsx` inside a `<group>` and compose them in `src/boards/main.circuit.tsx` with `autorouter="auto-local"` and `pcbStyle` / `RoutingTolerances` matching `specs/board.spec.json -> fabRules`.
+4. Run `just check` (or `just test`) after each subcircuit and resolve all placement/courtyard overlaps before adding the next block. Use `just check-summary` to inspect the grouped error summary without reading raw `dist/checks-report.json`.
+5. **Avoid micro-nudging loops**: If `auto-local` still fails DRC after 3 to 5 targeted placement adjustments, stop nudging coordinates by 0.2 mm. Re-architect the crowded zone (move parts to the opposite layer, rotate ICs to uncross pinouts, or widen routing channels) or run `just route` (Freerouting).
+6. Run `just verify` before finishing. Never weaken tests or bypass DRC with `--ignore-*-drc` or `drcChecksDisabled`.
 
 ## Handling Feedback & Major Changes
 

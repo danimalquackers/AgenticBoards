@@ -22,6 +22,7 @@ export interface CircuitIndex {
   pcbTraces: any[];
   pcbVias: any[];
   pcbHoles: any[];
+  pcbCopperPours: any[];
   cadModels: any[];
   sourceNets: any[];
   sourcePorts: any[];
@@ -139,6 +140,7 @@ export function indexCircuit(circuitJson: any[]): CircuitIndex {
     pcbTraces: [] as any[],
     pcbVias: [] as any[],
     pcbHoles: [] as any[],
+    pcbCopperPours: [] as any[],
     cadModels: [] as any[],
     sourceNets: [] as any[],
     sourcePorts: [] as any[],
@@ -154,6 +156,7 @@ export function indexCircuit(circuitJson: any[]): CircuitIndex {
     pcb_via: buckets.pcbVias,
     pcb_hole: buckets.pcbHoles,
     pcb_plated_hole: buckets.pcbHoles,
+    pcb_copper_pour: buckets.pcbCopperPours,
     cad_component: buckets.cadModels,
     source_net: buckets.sourceNets,
     source_port: buckets.sourcePorts,

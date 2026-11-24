@@ -173,6 +173,17 @@ function checkTraceAmpacity(idx: CircuitIndex, spec: BoardSpec): CheckFinding[] 
     const railNet = idx.netByName.get(rail.net);
     if (!railNet) continue;
 
+    // A dedicated copper pour on this rail carries bulk current; skip narrow-fanout ampacity flags.
+    const hasCopperPour = idx.pcbCopperPours.some(
+      (pour) =>
+        pour.source_net_id === railNet.source_net_id ||
+        idx.connMap.areIdsConnected(
+          pour.source_net_id || pour.pcb_copper_pour_id,
+          railNet.source_net_id,
+        ),
+    );
+    if (hasCopperPour) continue;
+
     const reqExternal = requiredRailWidthMm(rail, spec, false);
     const reqInternal = requiredRailWidthMm(rail, spec, true);
     if (reqExternal <= 0 && reqInternal <= 0) continue;

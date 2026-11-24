@@ -26,7 +26,8 @@ for (const sc of idx.sourceComponents) {
   const cost = spec.budget.bomCosts[name];
   const lcsc = cost?.lcsc ?? sc.supplier_part_numbers?.jlcpcb?.[0] ?? "";
   const comment = sc.display_resistance ?? sc.display_capacitance ?? cost?.mpn ?? sc.ftype ?? name;
-  const footprint = idx.pcbBySourceId.get(sc.source_component_id)?.footprint_name ?? "";
+  const pcb = idx.pcbBySourceId.get(sc.source_component_id);
+  const footprint = pcb?.footprint_name || sc.footprint || cost?.mpn || sc.ftype || "";
   bomRows.push(csvRow([comment, name, footprint, lcsc, cost?.mpn, cost?.unitCostUsd, cost?.notes]));
 }
 

@@ -50,8 +50,16 @@ Use the matching JSX primitive to prevent `source_refdes_convention_warning` and
 ## Routing: `connections` vs `<trace>`
 
 - **General nets**: `connections={{ pin1: "net.V3V3", pin2: "net.GND" }}` is concise and supported by `checks/constraints.ts`.
-- **High-current power buses**: Use `<trace from=".J1 > .VBUS" to=".U1 > .VIN" thickness="0.5mm" />` (or explicit `pcbPath={[{ x, y }, ...]}`) so the autorouter keeps the full bus width.
+- **High-current power buses**: Use `<trace from=".J1 > .VBUS" to=".U1 > .VIN" thickness="0.5mm" />` (or a `<copperpour>` on that net). Avoid mixing `connections={{ ... }}` and `<trace thickness="..." />` on the same net, as `auto-local` may ignore the trace thickness.
 - **Length-matched differential pairs**: Place source and destination pads aligned on the same axis and provide symmetric `pcbPath` waypoints on `<trace>` for zero skew.
+
+## Common `tscircuit` Pitfalls
+
+- **Never put `unbroken` on inner `<copperpour>` in dense multi-layer boards**: `<copperpour unbroken />` locks `auto-local` out of that layer and can trigger multi-hour routing thrash. Omit `unbroken`; `just kicad-drc` fills the solid zone automatically via `--refill-zones`.
+- **Keepout tag & layers**: Use `<keepout>` (not `<pcbkeepout>`). Do not include `"top"` on an antenna keepout when the wireless module's own pads/courtyard sit on `top` (causes KiCad `items_not_allowed`).
+- **`pcbPath` coordinates**: Waypoints in `pcbPath` are relative to the `from` port by default. Do not pass `pcbPathRelativeTo="board"` (crashes `@tscircuit/core`).
+- **Dual-sided connectors**: If top and bottom pads share identical `(x, y)` coordinates, `tscircuit` may silently drop one pad; offset the bottom pad by `0.02 mm`.
+- **EasyEDA imports (`tsci import`)**: If an imported `.tsx` footprint throws `ReferenceError: React is not defined`, add `import React from "react"` at the top of that file.
 
 ## Human-Readable Schematic Layout
 

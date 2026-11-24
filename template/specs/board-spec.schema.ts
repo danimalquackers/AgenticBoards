@@ -13,13 +13,17 @@ export const MountingHoleSchema = z.object({
   toleranceMm: z.number().nonnegative().default(0.25),
 });
 
+const KeepoutLayerSchema = z
+  .string()
+  .regex(/^(top|bottom|all|inner[1-9]\d*)$/, 'Layer must be "top", "bottom", "all", or "inner<N>"');
+
 export const KeepoutZoneSchema = z.object({
   name: z.string(),
   xMm: z.number(),
   yMm: z.number(),
   widthMm: z.number().positive(),
   heightMm: z.number().positive(),
-  layers: z.array(z.enum(["top", "bottom", "all"])).default(["all"]),
+  layers: z.array(KeepoutLayerSchema).default(["all"]),
 });
 
 export const PowerRailSchema = z.object({
@@ -74,8 +78,8 @@ export const BoardSpecSchema = z.object({
     layers: z
       .number()
       .int()
-      .refine((v) => [2, 4, 6, 8].includes(v), {
-        message: "layers must be 2, 4, 6, or 8",
+      .refine((v) => v === 1 || (v >= 2 && v % 2 === 0), {
+        message: "layers must be 1 or an even integer >= 2",
       }),
     copperWeightOz: z.number().positive().default(1),
   }),

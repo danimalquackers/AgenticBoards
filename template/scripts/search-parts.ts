@@ -27,6 +27,19 @@ async function searchPart(query: string): Promise<SearchResult> {
     return { query, output: lines.join("\n") || "(no matches)", ok: true };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    const stderr =
+      typeof err === "object" && err !== null && "stderr" in err ? String(err.stderr ?? "") : "";
+    const combined = `${message}\n${stderr}`;
+
+    // Upstream `@tscircuit/cli search` crashes when a raw LCSC C-number has null stock.
+    if (combined.includes("toLocaleString") && /^C\d+$/i.test(query.trim())) {
+      return {
+        query,
+        output: `(tsci search hit upstream null-stock bug for ${query}; use \`tsci import "${query}"\` directly)`,
+        ok: true,
+      };
+    }
+
     return { query, output: `ERROR: ${message}`, ok: false };
   }
 }

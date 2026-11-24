@@ -3,8 +3,9 @@ import { dirname, resolve } from "node:path";
 import { loadSpec } from "../checks/index";
 
 /**
- * Generates a KiCad `.kicad_pro` file whose design rules match `specs/board.spec.json -> fabRules`.
- * `kicad-cli pcb drc` automatically reads a sibling `.kicad_pro` when checking `board.kicad_pcb`.
+ * Generates a KiCad `.kicad_pro` file whose design rules and Default netclass
+ * match `specs/board.spec.json -> fabRules`. `kicad-cli pcb drc` automatically
+ * reads a sibling `.kicad_pro` when checking `board.kicad_pcb`.
  */
 const outPath = resolve(process.cwd(), process.argv[2] ?? "dist/exports/board.kicad_pro");
 const spec = loadSpec("specs/board.spec.json");
@@ -31,6 +32,17 @@ const kicadProject = {
         min_via_diameter: fab.minViaDiameterMm,
       },
     },
+  },
+  net_settings: {
+    classes: [
+      {
+        clearance: fab.minClearanceMm,
+        name: "Default",
+        track_width: fab.minTraceWidthMm,
+        via_diameter: fab.minViaDiameterMm,
+        via_drill: fab.minViaDrillMm,
+      },
+    ],
   },
   meta: {
     filename: "board.kicad_pro",
