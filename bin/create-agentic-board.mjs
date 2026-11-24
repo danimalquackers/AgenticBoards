@@ -23,6 +23,20 @@ const { version } = JSON.parse(readFileSync(resolve(ROOT_DIR, "package.json"), "
 const NIX_FILES = new Set(["flake.nix", "flake.lock", "shell.nix", "treefmt.nix", ".envrc"]);
 const SKIP_DIRS = new Set(["node_modules", "dist", ".direnv", ".git"]);
 
+// Framework files safe to overwrite during `--update` (never touches `src/`, `specs/board.spec.json`, `tests/`, or `package.json`).
+const MANAGED_PATHS = [
+  ".agents",
+  "AGENTS.md",
+  "checks",
+  "scripts",
+  "specs/board-spec.schema.ts",
+  "justfile",
+  "biome.json",
+  "tsconfig.json",
+  "tscircuit.config.json",
+];
+const MANAGED_NIX_FILES = ["flake.nix", "shell.nix", "treefmt.nix", ".envrc"];
+
 function slugify(input) {
   const slug = input
     .toLowerCase()
@@ -36,11 +50,18 @@ function hasCommand(cmd) {
   return spawnSync(cmd, ["--version"], { stdio: "ignore" }).status === 0;
 }
 
-function makeWritable(dir) {
-  chmodSync(dir, statSync(dir).mode | 0o700);
+function makeWritable(targetPath) {
+  const stat = statSync(targetPath);
 
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    const fullPath = resolve(dir, entry.name);
+  if (stat.isFile()) {
+    chmodSync(targetPath, stat.mode | 0o200);
+    return;
+  }
+
+  chmodSync(targetPath, stat.mode | 0o700);
+
+  for (const entry of readdirSync(targetPath, { withFileTypes: true })) {
+    const fullPath = resolve(targetPath, entry.name);
 
     if (entry.isDirectory()) {
       makeWritable(fullPath);
@@ -152,17 +173,72 @@ function printNextSteps({ projectName, targetArg, targetDir, useNix, nixAvailabl
   );
 }
 
+function updateExistingProject(targetDir, { useNix }) {
+  const looksLikeProject =
+    existsSync(resolve(targetDir, "specs/board.spec.json")) ||
+    existsSync(resolve(targetDir, "package.json"));
+
+  if (!existsSync(targetDir) || !looksLikeProject) {
+    console.error(
+      `Error: "${targetDir}" does not look like an existing AgenticBoards project (missing package.json and specs/board.spec.json).`,
+    );
+    process.exit(1);
+  }
+
+  const hasNix =
+    existsSync(resolve(targetDir, "flake.nix")) || existsSync(resolve(targetDir, "shell.nix"));
+  const pathsToSync = [...MANAGED_PATHS, ...(useNix && hasNix ? MANAGED_NIX_FILES : [])];
+
+  const updated = [];
+
+  for (const relPath of pathsToSync) {
+    const src = resolve(TEMPLATE_DIR, relPath);
+    const dst = resolve(targetDir, relPath);
+    if (!existsSync(src)) continue;
+
+    mkdirSync(dirname(dst), { recursive: true });
+    if (existsSync(dst)) makeWritable(dst);
+    cpSync(src, dst, { recursive: true, force: true });
+    makeWritable(dst);
+    updated.push(relPath);
+  }
+
+  const hookPath = resolve(targetDir, ".agents/hooks/verify-before-stop.sh");
+  if (existsSync(hookPath)) chmodSync(hookPath, 0o755);
+
+  console.log(`\nUpdated AgenticBoards framework files in ${targetDir}:`);
+  for (const relPath of updated) {
+    console.log(`  - ${relPath}`);
+  }
+  console.log(
+    "\nPreserved user PCB files (src/, specs/board.spec.json, tests/, package.json, README.md).",
+  );
+  console.log("Review changes with `git diff` and run `just verify` to confirm checks pass.");
+}
+
 const program = new Command()
   .name("create-agentic-board")
   .description(
     "Scaffold a TDD-driven, fab-ready PCB project powered by tscircuit, ngspice, KiCad CLI, Freerouting, and just.",
   )
   .version(version)
-  .argument("[project-dir]", "Target directory for the new PCB project")
+  .argument("[project-dir]", "Target directory (defaults to `.` when --update is set)")
+  .option(
+    "-u, --update",
+    "Update framework files (skills, checks, scripts, justfile, configs) in an existing project without overwriting PCB files",
+  )
   .option("--no-nix", "Omit Nix and direnv files (flake.nix, shell.nix, treefmt.nix, .envrc)")
   .option("--no-git", "Skip `git init && git add -A`")
   .option("--no-install", "Skip running `npm install --legacy-peer-deps`")
   .action(async (dirArg, opts) => {
+    const useNix = opts.nix !== false;
+
+    if (opts.update) {
+      const targetDir = resolve(process.cwd(), dirArg ?? ".");
+      updateExistingProject(targetDir, { useNix });
+      return;
+    }
+
     const targetArg = await resolveTargetDir(dirArg, program);
     const targetDir = resolve(process.cwd(), targetArg);
     const projectName = slugify(basename(targetDir));
@@ -172,7 +248,6 @@ const program = new Command()
       process.exit(1);
     }
 
-    const useNix = opts.nix !== false;
     const useGit = opts.git !== false;
     const nixAvailable = hasCommand("nix");
     const shouldInstall = opts.install !== false;

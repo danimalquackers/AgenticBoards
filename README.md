@@ -131,11 +131,22 @@ Run `create-agentic-board --help` for full usage (powered by `commander`):
 
 ```text
 create-agentic-board [project-dir] [options]
+  -u, --update   Update framework files (skills, checks, scripts, justfile, configs) in an existing project without overwriting PCB files
   --no-nix       Omit Nix and direnv files (flake.nix, shell.nix, treefmt.nix, .envrc)
   --no-git       Skip `git init && git add -A`
   --no-install   Skip running `npm install --legacy-peer-deps`
   -V, --version  Output the version number
   -h, --help     Display help
+```
+
+### Updating an Existing Project
+
+Refresh skills, checks, scripts, `justfile`, and configs in an existing board repo without touching `src/`, `specs/board.spec.json`, `tests/`, `package.json`, or `README.md`:
+
+```bash
+nix run github:danimalquackers/AgenticBoards -- --update .
+# or without Nix:
+npx create-agentic-board --update .
 ```
 
 ## Repository Structure
