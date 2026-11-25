@@ -111,9 +111,14 @@ kicad-drc: export-kicad
 
     tsx scripts/check-kicad-drc.ts "{{ exports_dir }}/kicad-drc.json"
 
-# External autorouting via Specctra DSN -> Freerouting -> SES (with DSN padstack repair & error checks)
+# External autorouting via Specctra DSN -> Freerouting -> SES -> src/routing/board-routes.json
 route passes="40": export-dsn
     tsx scripts/freeroute.ts "{{ exports_dir }}/board.dsn" "{{ routing_dir }}/board.ses" "{{ passes }}"
+    tsx scripts/import-ses.ts "{{ routing_dir }}/board.ses" "src/routing/board-routes.json" "dist/circuit.json"
+
+# Length-match differential pairs in src/routing/board-routes.json per specs/board.spec.json
+tune-skew:
+    tsx scripts/tune-skew.ts "src/routing/board-routes.json" "dist/circuit.json"
 
 # Full manufacturing & PCBA release bundle + bring-up guide + independent KiCad CLI DRC gate
 export-all: verify export-renders export-gerbers export-pcba export-3d export-dsn export-netlist export-test-guide kicad-drc

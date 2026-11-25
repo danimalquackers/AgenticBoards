@@ -20,15 +20,19 @@ Generate only what you need via `just` (run `just` to list all recipes):
 - `just export-dsn` / `just export-netlist` — `board.dsn`, `netlist.txt`
 - `just export-test-guide` — `bringup-test-guide.md` (power-off short checks, test-point coordinate/voltage table, power-on sequence, SI probing notes, and SPICE baseline)
 
-## 2. Optional External Autorouting (Freerouting)
+## 2. Optional External Autorouting & Tuning
 
-For dense multi-layer boards where `autorouter="auto-local"` cannot route cleanly:
+For dense multi-layer boards where `autorouter="auto-local"` cannot route cleanly or
+differential pairs exceed `maxDiffPairSkewMm`:
 
 ```bash
 just route
+just tune-skew   # optional: length-matches differentialPairs in src/routing/board-routes.json
 ```
 
-Exports `dist/exports/board.dsn` and runs headless `freerouting` → `dist/routing/board.ses`.
+`just route` injects `fabRules`, `keepoutZones`, and `powerRails` trace widths into
+`dist/exports/board.dsn`, runs headless `freerouting`, and imports stitched multi-layer
+routes into `src/routing/board-routes.json` for `<autoroutingphase pcbTracePaths={boardRoutes} />`.
 
 ## 3. Full Release Sign-Off Gate
 

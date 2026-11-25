@@ -79,7 +79,7 @@ are written in `src/boards/main.circuit.tsx`:
 2. Build and wire **1 to 2 subcircuits at a time** (outline + connectors + mounting holes -> power stage -> core IC -> peripherals -> silkscreen/polish). Do not dump dozens of unverified components in one pass.
 3. Put each functional block in `src/subcircuits/<Block>.tsx` inside a `<group>` and compose them in `src/boards/main.circuit.tsx` with `autorouter="auto-local"` and `pcbStyle` / `RoutingTolerances` matching `specs/board.spec.json -> fabRules`.
 4. Run `just check` (or `just test`) after each subcircuit and resolve all placement/courtyard overlaps before adding the next block. Use `just check-summary` to inspect the grouped error summary without reading raw `dist/checks-report.json`.
-5. **Avoid micro-nudging loops**: If `auto-local` still fails DRC after 3 to 5 targeted placement adjustments, stop nudging coordinates by 0.2 mm. Re-architect the crowded zone (move parts to the opposite layer, rotate ICs to uncross pinouts, or widen routing channels) or run `just route` (Freerouting).
+5. **Avoid micro-nudging loops & custom scratch routers**: If `auto-local` still fails DRC after 3 to 5 targeted placement adjustments, stop nudging coordinates by 0.2 mm and **never** write ad-hoc A\* or serpentine routing scripts in `scratch/`. Re-architect the crowded zone (uncross diff-pair ICs/connectors, move parts to the opposite layer, rotate ICs, or widen channels) or run `just route` (and `just tune-skew` if differential pairs need length matching).
 6. Run `just verify` before finishing. Never weaken tests or bypass DRC with `--ignore-*-drc` or `drcChecksDisabled`.
 
 ## Handling Feedback & Major Changes

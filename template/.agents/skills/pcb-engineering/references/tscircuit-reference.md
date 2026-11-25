@@ -51,7 +51,8 @@ Use the matching JSX primitive to prevent `source_refdes_convention_warning` and
 
 - **General nets**: `connections={{ pin1: "net.V3V3", pin2: "net.GND" }}` is concise and supported by `checks/constraints.ts`.
 - **High-current power buses**: Use `<trace from=".J1 > .VBUS" to=".U1 > .VIN" thickness="0.5mm" />` (or a `<copperpour>` on that net). Avoid mixing `connections={{ ... }}` and `<trace thickness="..." />` on the same net, as `auto-local` may ignore the trace thickness.
-- **Length-matched differential pairs**: Place source and destination pads aligned on the same axis and provide symmetric `pcbPath` waypoints on `<trace>` for zero skew.
+- **Length-matched differential pairs**: Align source and destination pads on the same axis **without crossing pins** (uncrossing an ESD IC or connector at placement time eliminates 10+ mm of skew before routing starts), and provide symmetric `pcbPath` waypoints on `<trace>` when needed.
+- **External Freerouting (`just route` + `just tune-skew`)**: `just route` injects `fabRules`, `keepoutZones`, and `powerRails` widths into `board.dsn`, runs Freerouting, and imports stitched multi-layer paths into `src/routing/board-routes.json`. Run `just tune-skew` to length-match differential pairs per `specs/board.spec.json`, then pass the result to `<autoroutingphase pcbTracePaths={boardRoutes} />`. Avoid writing custom A\* or serpentine routing scripts in `scratch/`, prefer to fail and ask the user whether or not to try a custom router script, which is likely to fail.
 
 ## Common `tscircuit` Pitfalls
 
