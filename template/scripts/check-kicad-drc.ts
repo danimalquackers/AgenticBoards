@@ -1,26 +1,28 @@
-import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { parseKicadDrcReport } from "../checks/circuit-index";
 
 /**
  * Parses a JSON report produced by `kicad-cli pcb drc --format json` and exits
  * non-zero if any DRC error or unconnected net is present.
  */
 const reportPath = resolve(process.cwd(), process.argv[2] ?? "dist/exports/kicad-drc.json");
-const report = JSON.parse(readFileSync(reportPath, "utf8"));
+const summary = parseKicadDrcReport(reportPath);
 
-const errors = (report.violations ?? []).filter((v: any) => v.severity === "error");
-const unconnected = report.unconnected_items ?? [];
-const total = errors.length + unconnected.length;
+if (!summary) {
+  console.error(`[KICAD-DRC] Report not found: ${reportPath}`);
+  process.exit(1);
+}
 
 console.log(
-  `[KICAD-DRC] ${total === 0 ? "PASS" : "FAIL"} (${errors.length} error(s), ${unconnected.length} unconnected net(s))`,
+  `[KICAD-DRC] ${summary.passed ? "PASS" : "FAIL"} ` +
+    `(${summary.errorCount} error(s), ${summary.unconnectedCount} unconnected net(s), ${summary.warningCount} warning(s))`,
 );
 
-for (const v of errors) {
+for (const v of summary.errors) {
   console.error(`  [ERROR] ${v.type ?? "drc"}: ${v.description ?? JSON.stringify(v)}`);
 }
-for (const u of unconnected) {
+for (const u of summary.unconnected) {
   console.error(`  [UNCONNECTED] ${u.description ?? JSON.stringify(u)}`);
 }
 
-if (total > 0) process.exit(1);
+if (!summary.passed) process.exit(1);

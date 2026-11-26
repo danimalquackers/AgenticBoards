@@ -49,10 +49,10 @@ Use the matching JSX primitive to prevent `source_refdes_convention_warning` and
 
 ## Routing: `connections` vs `<trace>`
 
-- **General nets**: `connections={{ pin1: "net.V3V3", pin2: "net.GND" }}` is concise and supported by `checks/constraints.ts`.
+- **General nets**: `connections={{ pin1: "net.V3V3", pin2: "net.GND" }}` is concise and compiles into standard Circuit JSON connectivity.
 - **High-current power buses**: Use `<trace from=".J1 > .VBUS" to=".U1 > .VIN" thickness="0.5mm" />` (or a `<copperpour>` on that net). Avoid mixing `connections={{ ... }}` and `<trace thickness="..." />` on the same net, as `auto-local` may ignore the trace thickness.
 - **Length-matched differential pairs**: Align source and destination pads on the same axis **without crossing pins** (uncrossing an ESD IC or connector at placement time eliminates 10+ mm of skew before routing starts), and provide symmetric `pcbPath` waypoints on `<trace>` when needed.
-- **External Freerouting (`just route` + `just route-tune`)**: `just route` injects `fabRules`, `keepoutZones`, `powerRails` widths, and 45° snap into `board.dsn`, runs headless Freerouting, and imports stitched multi-layer paths into `src/routing/board-routes.json`. Run `just route-tune` to length-match differential pairs per `specs/board.spec.json`, then pass the result to `<autoroutingphase pcbTracePaths={boardRoutes} />`. Avoid writing custom A\* or serpentine routing scripts in `scratch/`, prefer to fail and ask the user whether or not to try a custom router script, which is likely to fail.
+- **External Freerouting (`just route` + `just route-tune`)**: `just route` stages a sanitized DSN (`fabRules`, `keepoutZones`, `netClasses`/rail widths, 45° snap), runs headless Freerouting, and imports stitched multi-layer paths into `src/routing/board-routes.json`. Run `just route-tune` to length-match differential pairs per `specs/board.spec.json`, then pass the result to `<autoroutingphase pcbTracePaths={boardRoutes} />`. Never write ad-hoc A\* or serpentine routing scripts; if routing still fails after re-architecting placement, stop and ask the user.
 
 ## Common `tscircuit` Pitfalls
 
@@ -60,7 +60,7 @@ Use the matching JSX primitive to prevent `source_refdes_convention_warning` and
 - **Keepout tag & layers**: Use `<keepout>` (not `<pcbkeepout>`). Do not include `"top"` on an antenna keepout when the wireless module's own pads/courtyard sit on `top` (causes KiCad `items_not_allowed`).
 - **`pcbPath` coordinates**: Waypoints in `pcbPath` are relative to the `from` port by default. Do not pass `pcbPathRelativeTo="board"` (crashes `@tscircuit/core`).
 - **Dual-sided connectors**: If top and bottom pads share identical `(x, y)` coordinates, `tscircuit` may silently drop one pad; offset the bottom pad by `0.02 mm`.
-- **EasyEDA imports (`tsci import`)**: If an imported `.tsx` footprint throws `ReferenceError: React is not defined`, add `import React from "react"` at the top of that file.
+- **EasyEDA imports (`tscircuit-cli import`)**: If an imported `.tsx` footprint throws `ReferenceError: React is not defined`, add `import React from "react"` at the top of that file.
 
 ## Human-Readable Engineering Schematic Layout
 

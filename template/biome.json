@@ -2,7 +2,7 @@
   "$schema": "https://biomejs.dev/schemas/2.6.5/schema.json",
   "files": {
     "ignoreUnknown": true,
-    "includes": ["**", "!.tscircuit", "!dist", "!node_modules"]
+    "includes": ["**", "!.direnv", "!.tscircuit", "!dist", "!node_modules", "!package-lock.json"]
   },
   "assist": {
     "actions": {

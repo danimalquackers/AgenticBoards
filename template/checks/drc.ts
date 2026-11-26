@@ -14,31 +14,31 @@ const DRC_VALIDATORS = [
   "checkDifferentNetTraceClearance",
 ] as const;
 
-function extractNativeFindings(raw: any[]): CheckFinding[] {
+function extractNativeFindings(idx: CircuitIndex): CheckFinding[] {
   const findings: CheckFinding[] = [];
 
-  for (const el of raw) {
+  for (const el of idx.nativeErrors) {
     const type = String(el?.type ?? "");
+    findings.push(
+      error(
+        "drc",
+        `drc.native.${el.error_type ?? type}`,
+        el.message ?? `Circuit JSON error: ${type}`,
+        { type, errorType: el.error_type },
+      ),
+    );
+  }
 
-    if (type.endsWith("_error") || el?.error_type) {
-      findings.push(
-        error(
-          "drc",
-          `drc.native.${el.error_type ?? type}`,
-          el.message ?? `Circuit JSON error: ${type}`,
-          { type, errorType: el.error_type },
-        ),
-      );
-    } else if (type.endsWith("_warning") || el?.warning_type) {
-      findings.push(
-        warn(
-          "drc",
-          `drc.native.${el.warning_type ?? type}`,
-          el.message ?? `Circuit JSON warning: ${type}`,
-          { type, warningType: el.warning_type },
-        ),
-      );
-    }
+  for (const el of idx.nativeWarnings) {
+    const type = String(el?.type ?? "");
+    findings.push(
+      warn(
+        "drc",
+        `drc.native.${el.warning_type ?? type}`,
+        el.message ?? `Circuit JSON warning: ${type}`,
+        { type, warningType: el.warning_type },
+      ),
+    );
   }
 
   return findings;
@@ -78,5 +78,5 @@ function runTscircuitValidators(idx: CircuitIndex, spec: BoardSpec): CheckFindin
 
 /** Runs native Circuit JSON error extraction and `@tscircuit/checks` DRC suites. */
 export function runDrcChecks(idx: CircuitIndex, spec: BoardSpec): CheckFinding[] {
-  return [...extractNativeFindings(idx.raw), ...runTscircuitValidators(idx, spec)];
+  return [...extractNativeFindings(idx), ...runTscircuitValidators(idx, spec)];
 }

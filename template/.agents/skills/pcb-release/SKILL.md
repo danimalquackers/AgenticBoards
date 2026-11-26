@@ -1,60 +1,46 @@
 ---
 name: pcb-release
 description: >-
-  Final fab-readiness sign-off using `just`: run verification, optional external
-  Freerouting, per-format exports (renders, Gerbers, JLCPCB BOM + PnP, KiCad,
-  STEP/glTF 3D), and independent KiCad CLI DRC cross-checks.
+  Manufacturing export and release sign-off workflow. Use when `just verify`
+  passes and you need external Freerouting, KiCad DRC, zone-filled Gerbers,
+  JLCPCB BOM/PnP, 3D models, bring-up docs, or final release packaging.
 ---
 
-# Fab-Ready Verification & Per-Format Exports
+# Manufacturing Release & Sign-Off
 
-## 1. Targeted Exports During Iteration
+## 1. Optional External Autorouting & Length Tuning
 
-Generate only what you need via `just` (run `just` to list all recipes):
-
-- `just export-renders` — `schematic.svg`, `pcb.svg`, `assembly.svg`
-- `just export-gerbers` — `gerbers.zip` (generated from the zone-filled, KiCad-DRC-verified `board.kicad_pcb`)
-- `just export-pcba` — JLCPCB `bom.csv` + Pick-and-Place CPL `pnp.csv`
-- `just export-kicad` — `kicad-project.zip`, `board.kicad_pcb`, `board.kicad_sch`, `board.kicad_pro`
-- `just export-3d` — `board.step`, `board.gltf`
-- `just export-dsn` / `just export-netlist` — `board.dsn`, `netlist.txt`
-- `just export-docs` — `bringup-test-guide.md` (continuity/short checks, diode & resistance checks, test-point voltage table, SI notes, and SPICE baseline)
-
-## 2. Optional External Autorouting & Tuning
-
-For dense multi-layer boards where `autorouter="auto-local"` cannot route cleanly or
-differential pairs exceed `maxDiffPairSkewMm`:
+When `autorouter="auto-local"` cannot route a dense board cleanly or differential pairs exceed `maxDiffPairSkewMm`:
 
 ```bash
-just route
-just route-tune  # optional: length-matches differentialPairs in src/routing/board-routes.json
+just route       # stages sanitized DSN (fabRules, keepouts, netClasses, 45° snap) -> src/routing/board-routes.json
+just route-tune  # optional: inserts 45° trombone meanders for differentialPairs
 ```
 
-`just route` injects `fabRules`, `keepoutZones`, `powerRails` trace widths, and 45° snap
-into `dist/exports/board.dsn`, runs headless `freerouting`, and imports stitched multi-layer
-routes into `src/routing/board-routes.json` for `<autoroutingphase pcbTracePaths={boardRoutes} />`.
+Consume `src/routing/board-routes.json` via `<autoroutingphase pcbTracePaths={boardRoutes} />` (see `pcb-engineering/references/tscircuit-reference.md`).
 
-## 3. Full Release Sign-Off Gate
+## 2. Targeted Per-Format Exports
+
+Run `just --list` for all recipes. Common targeted exports during iteration:
+
+- `just check-preview` — fast `dist/preview/schematic.svg` & `pcb.svg`
+- `just check-kicad` — `kicad-cli pcb drc --refill-zones --save-board` + zone-filled `kicad-project.zip`
+- `just export-gerbers` — `gerbers.zip` plotted from the KiCad-DRC-verified, zone-filled PCB
+- `just export-pcba` — JLCPCB `bom.csv` + `pnp.csv`
+- `just export-renders` / `just export-3d` / `just export-docs`
+
+## 3. Full Release Pass
 
 ```bash
 just export-all
 ```
 
-Runs `just verify`, `just check-kicad` (syncing `fabRules`, refilling zones, and exiting
-non-zero on any KiCad DRC error or unconnected net), generates zone-filled Gerbers directly
-from the verified KiCad PCB, and exports all deliverables into `dist/exports/`.
+Runs `just verify` -> `just check-kicad` (zero DRC errors, zero unconnected nets, refills zones, saves filled `kicad-project.zip`) -> zone-filled `gerbers.zip` -> PCBA -> renders -> 3D -> DSN/netlist -> `bringup-test-guide.md`.
 
-Inspect `dist/exports/kicad-drc.json` for any remaining warnings, optionally run
-`tsci quote` for fab pricing, and do a final visual sign-off in the live preview
-at `http://localhost:3020` (`just dev`) and `dist/exports/schematic.svg` / `pcb.svg`
-for **schematic clarity** (compact grouping, left-to-right flow, no scattered parts or
-overlapping net labels), silkscreen legibility, polarity marks, connector alignment,
-and 3D clearances.
+Inspect `just check-status` and `dist/exports/kicad-drc.json` for any warnings, visually inspect `dist/exports/schematic.svg` and `pcb.svg` (and `http://localhost:3020`) for schematic clarity, silkscreen legibility, polarity marks, and connector orientation.
 
-## 4. Independent Expert Verifier Subagent (`pcb-review`)
+## 4. Final Independent Sign-Off (`pcb-review`)
 
-Before presenting the finished board to the user, launch a fresh, read-only verifier
-subagent with the `pcb-review` skill to audit the design against the original user
-requirements, relevant electrical/protocol specifications (USB-C/PD/USB4, RF, power/LiPo,
-digital buses), BOM/fab realism, and `dist/exports/bringup-test-guide.md`. Fix any
-blocking defects reported and re-run `just export-all` before sign-off.
+Run a **Stage 2 `pcb-review`** audit before presenting the board to the user. Fix every blocking defect reported and re-run `just export-all` until clean.
+
+**Done when**: `just export-all` exits 0 and Stage 2 `pcb-review` returns `PASS` (or `PASS WITH MINOR NOTES` with zero critical defects).

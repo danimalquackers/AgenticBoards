@@ -4,7 +4,7 @@
     "Stop": [
       {
         "type": "command",
-        "command": "./hooks/verify-before-stop.sh",
+        "command": ".agents/hooks/verify-before-stop.sh",
         "timeout": 10
       }
     ]

@@ -1,8 +1,9 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { ipc2221MinTraceWidthMm } from "../checks/electrical-heuristics";
+import { toKicadLayer } from "../checks/circuit-index";
 import { loadSpec } from "../checks/index";
+import { resolveNetClassRules } from "../checks/net-rules";
 import type { BoardSpec } from "../specs/board-spec.schema";
 
 /**
@@ -40,15 +41,6 @@ function extractStructureLayers(dsn: string): string[] {
     layers.push(match[1]);
   }
   return layers.length > 0 ? layers : ["F.Cu", "B.Cu"];
-}
-
-function mapSpecLayerToKicad(layer: string, allLayers: string[]): string[] {
-  if (layer === "all") return allLayers;
-  if (layer === "top") return ["F.Cu"];
-  if (layer === "bottom") return ["B.Cu"];
-  const inner = layer.match(/^inner(\d+)$/i);
-  if (inner) return [`In${inner[1]}.Cu`];
-  return [layer];
 }
 
 function stripWiringScope(dsn: string): string {
@@ -98,7 +90,7 @@ function injectKeepouts(dsn: string, layers: string[], spec: BoardSpec | null): 
     const x2 = Math.round((zone.xMm + zone.widthMm / 2) * 1000);
     const y1 = Math.round((zone.yMm - zone.heightMm / 2) * 1000);
     const y2 = Math.round((zone.yMm + zone.heightMm / 2) * 1000);
-    const targetLayers = new Set(zone.layers.flatMap((l) => mapSpecLayerToKicad(l, layers)));
+    const targetLayers = new Set(zone.layers.flatMap((l) => toKicadLayer(l, layers)));
 
     for (const layer of targetLayers) {
       blocks.push(
@@ -111,7 +103,9 @@ function injectKeepouts(dsn: string, layers: string[], spec: BoardSpec | null): 
 }
 
 function injectNetClasses(dsn: string, spec: BoardSpec | null): string {
-  if (!spec || (spec.netClasses.length === 0 && spec.powerRails.length === 0)) return dsn;
+  if (!spec) return dsn;
+  const resolved = resolveNetClassRules(spec);
+  if (resolved.length === 0) return dsn;
 
   const netStart = dsn.indexOf("(network");
   if (netStart < 0) return dsn;
@@ -119,59 +113,28 @@ function injectNetClasses(dsn: string, spec: BoardSpec | null): string {
   if (netEnd < 0) return dsn;
 
   const networkBlock = dsn.slice(netStart, netEnd);
-  const dsnNetNames = [...networkBlock.matchAll(/\(net\s+"([^"]+)"/g)].map((m) => m[1]);
+  const dsnNetNames = [...networkBlock.matchAll(/\(net\s+(?:"([^"]+)"|([^\s()"]+))/g)]
+    .map((m) => m[1] ?? m[2])
+    .filter((n): n is string => Boolean(n));
   const defaultVia = dsn.match(/\bVia\[[^\s()"]+\]/)?.[0];
   const assignedDsnNets = new Set<string>();
   const classes: string[] = [];
 
-  const matchDsnNets = (specNets: string[]): string[] =>
-    dsnNetNames.filter(
+  for (const nc of resolved) {
+    const matchingNets = dsnNetNames.filter(
       (n) =>
         !assignedDsnNets.has(n) &&
-        specNets.some((target) => n === target || n.startsWith(`${target}_source_net_`)),
+        nc.nets.some((target) => n === target || n.startsWith(`${target}_source_net_`)),
     );
-
-  for (const nc of spec.netClasses) {
-    const matchingNets = matchDsnNets(nc.nets);
     if (matchingNets.length === 0) continue;
 
     for (const n of matchingNets) assignedDsnNets.add(n);
-    const widthUm = Math.round((nc.trackWidthMm ?? spec.fabRules.minTraceWidthMm) * 1000);
-    const clearanceUm = Math.round((nc.clearanceMm ?? spec.fabRules.minClearanceMm) * 1000);
+    const widthUm = Math.round(nc.trackWidthMm * 1000);
+    const clearanceUm = Math.round(nc.clearanceMm * 1000);
     const quoted = matchingNets.map((n) => `"${n}"`).join(" ");
     const viaLine = defaultVia ? `      (circuit (use_via "${defaultVia}"))\n` : "";
     classes.push(
       `    (class "${nc.name}" ${quoted}\n${viaLine}      (rule (width ${widthUm}) (clearance ${clearanceUm}))\n    )`,
-    );
-  }
-
-  for (const rail of spec.powerRails) {
-    const reqWidthMm = Math.max(
-      ipc2221MinTraceWidthMm(
-        rail.maxCurrentA,
-        spec.electrical.maxTraceTempRiseC,
-        spec.dimensions.copperWeightOz,
-      ),
-      rail.minTraceWidthMm ?? 0,
-    );
-    const reqClearanceMm = Math.max(spec.fabRules.minClearanceMm, rail.minClearanceMm ?? 0);
-    if (
-      reqWidthMm <= spec.fabRules.minTraceWidthMm + 1e-3 &&
-      reqClearanceMm <= spec.fabRules.minClearanceMm + 1e-3
-    ) {
-      continue;
-    }
-
-    const matchingNets = matchDsnNets([rail.net]);
-    if (matchingNets.length === 0) continue;
-
-    for (const n of matchingNets) assignedDsnNets.add(n);
-    const widthUm = Math.round(Math.max(spec.fabRules.minTraceWidthMm, reqWidthMm) * 1000);
-    const clearanceUm = Math.round(reqClearanceMm * 1000);
-    const quoted = matchingNets.map((n) => `"${n}"`).join(" ");
-    const viaLine = defaultVia ? `      (circuit (use_via "${defaultVia}"))\n` : "";
-    classes.push(
-      `    (class "rail_${rail.net}" ${quoted}\n${viaLine}      (rule (width ${widthUm}) (clearance ${clearanceUm}))\n    )`,
     );
   }
 
@@ -325,19 +288,19 @@ const cleaned = splitMixedSideComponents(
 );
 const { text: fixedDsn, patched } = repairMissingViaPadstacks(cleaned, layers);
 
-writeFileSync(dsnPath, fixedDsn);
+mkdirSync(dirname(sesPath), { recursive: true });
+const stagedDsnPath = resolve(dirname(sesPath), "board.sanitized.dsn");
+writeFileSync(stagedDsnPath, fixedDsn);
 if (patched.length > 0) {
   console.log(`[FREEROUTING] Added ${layers.length}L DSN via padstack(s): ${patched.join(", ")}`);
 }
-
-mkdirSync(dirname(sesPath), { recursive: true });
 
 const proc = spawnSync(
   "freerouting",
   [
     "--gui.enabled=false",
     "-de",
-    dsnPath,
+    stagedDsnPath,
     "-do",
     sesPath,
     `--router.autorouter.max_passes=${passes}`,

@@ -5,7 +5,7 @@ Load this reference when the board includes an RF transceiver, wireless module (
 ## 1. Antenna Placement & Keepout Zones
 
 - Place PCB/chip antennas or wireless module antenna overhangs at a **board corner or outer edge**, away from metal enclosures, batteries, tall connectors, and switching regulators.
-- Define an explicit `keepoutZones` entry in `specs/board.spec.json` covering the antenna clearance area with `"layers": ["all"]` — **no copper pours, traces, silkscreen, or components** on any layer under the antenna.
+- Define an explicit `keepoutZones` entry in `specs/board.spec.json` covering the copper-free antenna overhang/clearance region. Use `"layers": ["all"]` only when the zone lies **outside** the wireless module's own `pcb_component` courtyard; if the module footprint extends over the antenna region on `top`, omit `"top"` (e.g. `["inner1", "inner2", "bottom"]`) so KiCad DRC and `checks/constraints.ts` do not flag the module's own courtyard.
 - Follow the module datasheet's exact overhang/ground-plane clearance dimensions (typically 5–15 mm free of copper).
 
 ## 2. 50 Ω Feedline & Matching Network

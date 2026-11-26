@@ -1,10 +1,16 @@
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import React from "react";
 import { Circuit } from "tscircuit";
 import { type BoardSpec, BoardSpecSchema } from "../specs/board-spec.schema";
-import { indexCircuit, isDirectRun, writeJson } from "./circuit-index";
+import {
+  indexCircuit,
+  isDirectRun,
+  parseKicadDrcReport,
+  readJson,
+  writeJson,
+} from "./circuit-index";
 import { runConstraintChecks } from "./constraints";
 import { runDrcChecks } from "./drc";
 import { runElectricalHeuristics } from "./electrical-heuristics";
@@ -58,11 +64,19 @@ export function formatFindingSummary(findings: CheckFinding[], maxSamples = 3): 
 }
 
 export function loadSpec(specPath = "specs/board.spec.json"): BoardSpec {
-  const raw = JSON.parse(readFileSync(resolve(process.cwd(), specPath), "utf8"));
+  const fullPath = resolve(process.cwd(), specPath);
+  const raw = readJson(fullPath);
   return BoardSpecSchema.parse(raw);
 }
 
 const DEFAULT_COMPILE_TIMEOUT_MS = 180_000;
+
+function resolveCompileTimeoutMs(): number {
+  const raw = process.env.AUTOROUTE_TIMEOUT_MS;
+  if (!raw || raw.trim() === "") return DEFAULT_COMPILE_TIMEOUT_MS;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_COMPILE_TIMEOUT_MS;
+}
 
 export async function compileBoard(
   entrypoint: string,
@@ -76,15 +90,20 @@ export async function compileBoard(
     throw new Error(`Entrypoint ${entrypoint} must default-export a React component function.`);
   }
 
-  const timeoutMs = Number(process.env.AUTOROUTE_TIMEOUT_MS ?? DEFAULT_COMPILE_TIMEOUT_MS);
+  const timeoutMs = resolveCompileTimeoutMs();
   const circuit = new Circuit();
-  const rootEl = Component();
-  const element =
-    options.routingDisabled && React.isValidElement(rootEl)
-      ? React.cloneElement(rootEl as React.ReactElement<Record<string, unknown>>, {
+  let element: React.ReactElement;
+
+  if (options.routingDisabled) {
+    const rendered = Component();
+    element = React.isValidElement(rendered)
+      ? React.cloneElement(rendered as React.ReactElement<Record<string, unknown>>, {
           routingDisabled: true,
         })
       : React.createElement(Component);
+  } else {
+    element = React.createElement(Component);
+  }
 
   circuit.add(element);
 
@@ -132,30 +151,28 @@ export async function loadOrCompileCircuit(entrypoint: string): Promise<any[]> {
       newestMtimeMs(resolve(process.cwd(), "specs")),
     );
     if (cachedMtime >= latestSource) {
-      return JSON.parse(readFileSync(cachedPath, "utf8")) as any[];
+      return readJson<any[]>(cachedPath);
     }
   }
 
-  return compileBoard(entrypoint);
+  const circuitJson = await compileBoard(entrypoint);
+  writeJson(cachedPath, circuitJson);
+  return circuitJson;
 }
 
-const ROUTING_ONLY_IDS = new Set([
+const ROUTING_ONLY_DRC_IDS = new Set([
   "drc.native.pcb_port_not_connected_error",
   "drc.native.pcb_trace_missing_error",
   "drc.checkEachPcbPortConnectedToPcbTrace",
-  "thermal.ampacity.trace_too_narrow",
-  "si.diff_pair.skew",
-  "si.trace_length.exceeded",
-  "si.netclass.trace_too_narrow",
 ]);
 
-export async function runAllBoardChecks(
-  specPath = "specs/board.spec.json",
+/** Pure check runner over compiled Circuit JSON (no compilation or disk writes). */
+export function runChecksOnCircuitJson(
+  circuitJson: any[],
+  spec: BoardSpec,
   options: { placementOnly?: boolean } = {},
-): Promise<CheckReport> {
+): CheckReport {
   const placementOnly = Boolean(options.placementOnly);
-  const spec = loadSpec(specPath);
-  const circuitJson = await compileBoard(spec.entrypoint, { routingDisabled: placementOnly });
   const idx = indexCircuit(circuitJson);
 
   const drcFindings = runDrcChecks(idx, spec);
@@ -164,17 +181,17 @@ export async function runAllBoardChecks(
     bom,
     boardMetrics,
   } = runConstraintChecks(idx, spec, { placementOnly });
-  const elecFindings = runElectricalHeuristics(idx, spec);
+  const elecFindings = runElectricalHeuristics(idx, spec, { placementOnly });
 
   const rawFindings = [...drcFindings, ...constraintFindings, ...elecFindings];
   const findings = placementOnly
-    ? rawFindings.filter((f) => !ROUTING_ONLY_IDS.has(f.id))
+    ? rawFindings.filter((f) => !ROUTING_ONLY_DRC_IDS.has(f.id))
     : rawFindings;
 
   const errorCount = findings.filter((f) => f.severity === "error").length;
   const warningCount = findings.filter((f) => f.severity === "warning").length;
 
-  const report: CheckReport = {
+  return {
     timestamp: new Date().toISOString(),
     projectName: spec.projectName,
     entrypoint: spec.entrypoint,
@@ -186,6 +203,16 @@ export async function runAllBoardChecks(
     summary: summarizeFindings(findings),
     findings,
   };
+}
+
+export async function runAllBoardChecks(
+  specPath = "specs/board.spec.json",
+  options: { placementOnly?: boolean } = {},
+): Promise<CheckReport> {
+  const placementOnly = Boolean(options.placementOnly);
+  const spec = loadSpec(specPath);
+  const circuitJson = await compileBoard(spec.entrypoint, { routingDisabled: placementOnly });
+  const report = runChecksOnCircuitJson(circuitJson, spec, { placementOnly });
 
   if (!placementOnly) {
     writeJson(resolve(process.cwd(), "dist/circuit.json"), circuitJson);
@@ -216,34 +243,23 @@ function printReport(report: CheckReport): void {
   }
 }
 
-function readKicadDrcSnapshot(): {
-  present: boolean;
-  passed: boolean;
-  errorCount: number;
-  unconnectedCount: number;
-  warningCount: number;
-} | null {
-  const drcPath = resolve(process.cwd(), "dist/exports/kicad-drc.json");
-  if (!existsSync(drcPath)) return null;
-
+function readKicadDrcSnapshot() {
   try {
-    const raw = JSON.parse(readFileSync(drcPath, "utf8")) as {
-      violations?: Array<{ severity?: string }>;
-      unconnected_items?: unknown[];
+    const summary = parseKicadDrcReport(resolve(process.cwd(), "dist/exports/kicad-drc.json"));
+    if (!summary) return null;
+    return {
+      present: summary.present,
+      passed: summary.passed,
+      errorCount: summary.errorCount,
+      unconnectedCount: summary.unconnectedCount,
+      warningCount: summary.warningCount,
     };
-    const violations = raw.violations ?? [];
-    const errorCount = violations.filter((v) => v.severity === "error").length;
-    const warningCount = violations.filter((v) => v.severity === "warning").length;
-    const unconnectedCount = (raw.unconnected_items ?? []).length;
+  } catch (err) {
     return {
       present: true,
-      passed: errorCount === 0 && unconnectedCount === 0,
-      errorCount,
-      unconnectedCount,
-      warningCount,
+      passed: false,
+      error: err instanceof Error ? err.message : String(err),
     };
-  } catch {
-    return null;
   }
 }
 
@@ -258,7 +274,7 @@ async function main(): Promise<void> {
       console.error("No dist/checks-report.json found. Run `just check` or `just test` first.");
       process.exit(1);
     }
-    report = JSON.parse(readFileSync(reportPath, "utf8")) as CheckReport;
+    report = readJson<CheckReport>(reportPath);
   } else {
     report = await runAllBoardChecks("specs/board.spec.json", { placementOnly });
   }

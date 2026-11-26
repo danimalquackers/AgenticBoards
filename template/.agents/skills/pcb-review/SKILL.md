@@ -1,132 +1,80 @@
 ---
 name: pcb-review
 description: >-
-  Unbiased, detail-oriented hardware design verifier run in a fresh read-only
-  subagent after `just verify` and `just export-all`. Independently researches
-  relevant datasheets and standards, audits the board against the original user
-  requirements, and reports defects and slop without modifying any files.
+  Read-only, unbiased hardware design verifier. Use at Stage 1 (pre-routing
+  architecture/BOM/Z-height check on complex boards) and Stage 2 (final fab
+  sign-off after `just export-all`). Reports defects only; never edits files.
 ---
 
 # Independent Hardware Design Verifier (`pcb-review`)
 
-Run this skill inside a **fresh, read-only verifier subagent** at **two gates**:
+Run inside a **fresh, read-only verifier subagent** (if your host environment cannot spawn subagents, run this checklist as a dedicated report-only self-review pass before making any further edits).
 
-1. **Stage 1 — Pre-Routing Architecture, BOM & Mechanical Gate (Fast, ~3–5 min)**:
-   Run right after `specs/board.spec.json`, parts selection, and initial placement pass
-   `just check-placement` and `just check-preview` — **before** investing time in routing.
-   Audits real LCSC/MPN SKUs, datasheet pin counts/voltages, enclosure Z-height stackup
-   (`maxTopHeightMm` / `maxBottomHeightMm`), connector orientation/mechanicals in
-   `dist/preview/pcb.svg` & `schematic.svg`, and protocol architecture.
-2. **Stage 2 — Final Fab Sign-Off Gate (Full Audit)**:
-   Run after `just export-all` passes. Audits the routed board (`just check-status`),
-   KiCad DRC, BOM/PnP, visual clarity (`schematic.svg`, `pcb.svg`), and `bringup-test-guide.md`.
+## Two Verification Checks
 
-In both stages, the verifier acts as a **fresh set of eyes**: detail-oriented, skeptical,
-and **report-only** (it never edits files or attempts fixes).
+1. **Stage 1 — Pre-Routing Architecture, BOM & Mechanical Check (Fast)**
+   - **When**: Required before routing on complex or enclosure-constrained boards (> 10 parts, tight Z-height, RF/antenna, high-speed USB/Ethernet, or switching power); optional on simple breakouts.
+   - **Artifacts to pass**: Original user requirements, `specs/board.spec.json`, `tests/`, `src/`, `dist/preview/schematic.svg`, `dist/preview/pcb.svg`, and `just check-placement` output.
+   - **Focus**: Real LCSC/MPN SKUs, datasheet pinouts/ratings, Z-height fit (`maxTopHeightMm`/`maxBottomHeightMm`), connector orientation/mechanicals, and protocol architecture.
 
-## How to Launch the Verifier Subagent
+2. **Stage 2 — Final Fab Sign-Off Check (Mandatory)**
+   - **When**: After `just export-all` exits 0.
+   - **Artifacts to pass**: Original user requirements, `specs/board.spec.json`, `tests/`, `src/`, `just check-status` output, `dist/exports/kicad-drc.json`, `dist/exports/bom.csv`, `dist/exports/schematic.svg`, `dist/exports/pcb.svg`, and `dist/exports/bringup-test-guide.md`.
+   - **Focus**: Full electrical, DRC, BOM/PnP, visual clarity, and bring-up guide sign-off.
 
-Keep the handoff **unbiased**:
+## Unbiased Handoff Rules
 
-1. Provide **only**:
-   - The user's **original requirements** (and any explicit user answers/changes).
-   - Paths to the board artifacts (`specs/board.spec.json`, `tests/`, `src/`,
-     `dist/checks-report.json`, `dist/exports/kicad-drc.json`, `dist/exports/bom.csv`,
-     `dist/exports/schematic.svg`, `dist/exports/pcb.svg`, and `dist/exports/bringup-test-guide.md`).
-2. **Do not** pass the author's design rationale, justifications, or "known minor issues"
-   framing — let the verifier evaluate the board strictly on its own merits.
-3. Instruct the verifier to **report findings only** and make zero file edits.
-4. The verification is not adversarial, it is intended to help catch and fix unseen issues.
+- Pass **only** the original user requirements (plus explicit user answers) and the artifact paths above.
+- Omit the author's design rationale, excuses, or "known minor issues" framing.
+- Report findings only — make zero file edits.
 
 ---
 
-## Verification Workflow (Verifier Subagent)
+## Audit Checklist
 
-### 1. Independent Research First (Do Not Trust Author Assumptions)
+### 1. Independent Research First
 
-Before reviewing the circuit line by line, independently research the external specs and
-datasheets that this board must satisfy:
+Verify external constraints independently before trusting `src/` or `specs/board.spec.json`:
 
-- **Mechanical & enclosure standards** referenced by the prompt (e.g., official enclosure
-  dimensions, PCB thickness, Z-height clearance, connector protrusion, mounting hole layout).
-- **Protocol & interface specifications** (e.g., USB-C/PD/EPR, USB3/USB4/Thunderbolt,
-  I2C/SPI/CAN, BLE/Wi-Fi RF layout rules).
-- **Key component datasheets** (MCU/module, buck/LDO, battery charger, ESD/TVS, connectors):
-  verify exact pinouts, absolute-maximum ratings, required external passives, strapping
-  pins, and footprint/pin-1 orientation independently — do not assume `src/` or
-  `specs/board.spec.json` got them right.
+- **Mechanical/enclosure specs** referenced in the prompt (dimensions, thickness, Z-height, connector protrusion, mounting holes).
+- **Protocol/interface standards** (USB-C/PD/EPR, USB3/4, I2C/SPI/CAN, BLE/Wi-Fi RF, HV clearance/creepage).
+- **Key component datasheets**: exact pinouts, absolute-max ratings, required external passives, strapping pins, and Pin-1/polarity orientation.
 
-### 2. Requirements & Test Integrity Audit
+### 2. Requirements & Test Integrity
 
-- Check every original user requirement against the compiled board and `src/`. Flag
-  anything silently dropped, downgraded without approval, or only checked analytically
-  rather than physically implemented.
-- Verify `just verify` and `just check-kicad` pass with **zero** suppressed checks
-  (`--ignore-*-drc`, `drcChecksDisabled`, weakened `fabRules`, or skipped tests).
-- Flag any leftover manual post-export KiCad steps — exports must be fab-ready as generated.
+- Confirm every original user requirement is physically implemented (not silently dropped, downgraded, or only checked analytically).
+- Confirm `just verify` and `just check-kicad` pass with zero suppressed checks (`--ignore-*-drc`, `drcChecksDisabled`, weakened `fabRules`, skipped tests) and zero manual post-export KiCad steps.
 
 ### 3. Protocol, Electrical & Datasheet Audit
 
-Audit every subsystem against the researched specs:
+- **USB-C / High-Speed**: Separate `5.1 kΩ` `Rd` on `CC1`/`CC2` for sink ports (none on passive pass-through); `VBUS` & TVS standoff rated for max negotiated PD voltage; unbroken GND plane, matched diff pairs, low-capacitance ESD, zero stub test points.
+- **Power & Battery**: Reverse-polarity & overcurrent protection; >= 2× cap voltage and resistor power derating; buck inductor `I_sat > I_peak`, feedback divider math, LDO dissipation; safe LiPo charge rate (`<= 0.5–1 C`) & back-feed isolation.
+- **RF, Analog & Digital**: Copper-free antenna keepout, 50 Ω feed/matching, crystal load caps, filtered `VDDA`; pinout & polarity on every IC, MOSFET (`G/D/S`), diode, and polarized cap; open-drain pull-ups, `RESET`/`BOOT` strapping, compatible logic levels.
 
-- **USB-C / PD / USB3 / USB4 / Thunderbolt**:
-  - Sink-only ports: separate `5.1kΩ` `Rd` pull-downs on both `CC1` and `CC2`.
-  - Passive pass-through ports: **no** permanent `Rd` pull-downs on `CC1`/`CC2`; `VBUS` tap
-    and TVS standoff voltage must survive max negotiated PD voltage (e.g., `>= 24V` for
-    `20V` PD, `>= 50V` for EPR).
-  - High-speed differential pairs (`D+/D-`, `TX/RX`): unbroken ground reference plane, matched
-    lengths (`<= maxDiffPairSkewMm`), ultra-low-capacitance ESD (`<= 0.5 pF` for SuperSpeed/USB4),
-    and **zero** stub test points.
-- **Power, Regulation & Battery (LiPo / Buck / LDO)**:
-  - Reverse-polarity and overcurrent protection (polyfuse/fuse) on external inputs.
-  - Capacitor voltage derating (`>= 2x` working voltage for X5R/X7R) and resistor power derating (`>= 2x`).
-  - Buck inductor saturation current (`I_sat > I_peak`), feedback divider math vs target
-    voltage, and LDO thermal dissipation (`P_diss = (Vin - Vout) * I`).
-  - LiPo charge current (`<= 0.5C–1C` for cell capacity) and power-path / back-feed isolation.
-- **RF, Analog & Digital**:
-  - Antenna keepout clear of copper/ground on all layers; 50 Ω feedline/matching network;
-    crystal load caps; filtered `VDDA`.
-  - Pinout and polarity check on every IC, MOSFET (`D/G/S`), diode (`anode/cathode`), and
-    polarized cap; pull-ups on open-drain buses (`I2C`), `RESET`/`BOOT` strapping, and
-    compatible logic levels.
+### 4. Mechanical, Visual & Anti-Slop Audit
 
-### 4. Mechanical, Fab Realism & Anti-Slop Audit
-
-- Confirm tall components (modules, inductors, connectors, battery) fit enclosure Z-height
-  and connector edges align with the shell.
-- Inspect custom footprints for pad pitch, pin-1 alignment, `<courtyardrect>`, and
-  solderability.
-- Inspect `dist/exports/bom.csv` for real, orderable MPN/LCSC parts and plausible pricing
-  (flag placeholder part numbers, unverified rotations, or test-point BOM clutter).
-- Flag dead code, unused nets, contradictory comments, copy-pasted mismatches, and
-  inaccurate or incomplete checks in `dist/exports/bringup-test-guide.md`.
-- Inspect visual reviewability (`dist/exports/schematic.svg`, `pcb.svg`, and `dist/checks-report.json`
-  schematic warnings): flag schematics missing `<schematicsheet>` or titled `<schematicbox>`
-  functional groupings, randomly scattered or sprawling layouts (extreme aspect ratio),
-  missing `<netlabel>`s / design notes, overlapping net labels (`schematic_component_styling_warning`),
-  or unreadable silkscreen.
+- Confirm tall parts fit Z-height limits and edge connectors face outward cleanly in `pcb.svg`.
+- Inspect custom footprints for pad pitch, Pin-1 mark, `<courtyardrect>`, and solderability.
+- Inspect `bom.csv` (Stage 2) or `budget.bomCosts` (Stage 1) for real orderable MPN/LCSC parts and plausible pricing.
+- Inspect `schematic.svg` and `pcb.svg`: `<schematicsheet>` frame, titled `<schematicbox>` blocks, compact layout, readable `<netlabel>`s without overlaps, and legible silkscreen.
+- Flag dead code, unused nets, contradictory comments, and inaccurate `bringup-test-guide.md` entries.
 
 ---
 
-## Output Format (Report Only — Do Not Edit Files)
+## Output Format (Report Only)
 
 ```markdown
 ## Hardware Verification Verdict: PASS | PASS WITH MINOR NOTES | FAIL
 
 ### Critical / Blocking Defects (Must Fix)
 
-- **[Category] `Component/File:line`** — Specific defect, which requirement or datasheet/spec
-  clause it violates, and what needs to change.
+- **[Category] `Component/File:line`** — Specific defect, violated requirement/datasheet clause, and required fix.
 
 ### Standards & Engineering Warnings
 
-- ...
+- **[Category] `Component/File:line`** — Risk or recommended hardening.
 
-### Slop & Documentation Findings
+### Verified Checks
 
-- ...
+- Concise list of independently verified requirements, datasheets, and exports.
 ```
-
-If the verdict is **FAIL**, the main agent (not the verifier) fixes every blocking defect,
-re-runs `just export-all`, and invokes a fresh verifier subagent until it returns **PASS**
-(or **PASS WITH MINOR NOTES**).

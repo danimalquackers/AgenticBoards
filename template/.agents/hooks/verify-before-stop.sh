@@ -21,8 +21,9 @@ if [ "${FULLY_IDLE}" != "true" ] || [ "${REASON}" != "NO_TOOL_CALL" ] || [ "${EX
 	exit 0
 fi
 
-# Skip nudging if another verification, export, or routing process is already active.
-if command -v pgrep >/dev/null 2>&1 && pgrep -f "checks/index\.ts|tscircuit-cli|freerouting" >/dev/null 2>&1; then
+# Skip nudging if another verification, export, simulation, or routing process is already active.
+# Intentionally ignores long-running `tscircuit-cli dev` live preview servers.
+if command -v pgrep >/dev/null 2>&1 && pgrep -f "checks/index\.ts|tscircuit-cli (export|simulate)|freerouting" >/dev/null 2>&1; then
 	printf '{}'
 	exit 0
 fi
@@ -35,7 +36,7 @@ if [ ! -f "${REPORT}" ]; then
 	exit 0
 fi
 
-NEW_FILES="$(find "${REPO_ROOT}/src" "${REPO_ROOT}/specs" -type f \( -name '*.tsx' -o -name '*.json' \) -newer "${REPORT}" 2>/dev/null | head -n 5 || true)"
+NEW_FILES="$(find "${REPO_ROOT}/src" "${REPO_ROOT}/specs" "${REPO_ROOT}/tests" -type f \( -name '*.tsx' -o -name '*.ts' -o -name '*.json' \) -newer "${REPORT}" 2>/dev/null | head -n 5 || true)"
 if [ -n "${NEW_FILES}" ]; then
 	printf '{"decision":"continue","reason":"Circuit or spec files changed since the last verification run. Run just verify to confirm all TDD PCB checks pass before stopping."}'
 	exit 0

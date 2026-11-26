@@ -84,7 +84,12 @@ async function verifyBom(specPath = "specs/board.spec.json"): Promise<void> {
     if (!entry.lcsc) {
       console.warn(`[WARN] ${designator}: missing LCSC part number`);
       issues += 1;
-    } else if (/^C\d+$/i.test(entry.lcsc.trim())) {
+    } else if (!/^C\d+$/i.test(entry.lcsc.trim())) {
+      console.warn(
+        `[WARN] ${designator}: malformed LCSC part number "${entry.lcsc}" (expected C<digits>)`,
+      );
+      issues += 1;
+    } else {
       const code = entry.lcsc.trim().toUpperCase();
       const list = lcscToDesignators.get(code) ?? [];
       list.push(designator);
@@ -103,7 +108,7 @@ async function verifyBom(specPath = "specs/board.spec.json"): Promise<void> {
       const refs = lcscToDesignators.get(result.query)?.join(", ") ?? "";
       console.log(`\n### ${result.query} (${refs})`);
       console.log(result.output);
-      if (!result.ok) issues += 1;
+      if (!result.ok || result.output === "(no matches)") issues += 1;
     }
   }
 

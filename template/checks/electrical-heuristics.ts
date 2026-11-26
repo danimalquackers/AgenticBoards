@@ -1,47 +1,21 @@
 import type { BoardSpec } from "../specs/board-spec.schema";
 import {
   type CircuitIndex,
+  componentBridgesNets,
+  componentOnNet,
   distanceMm,
   error,
+  getPcbTracesForNet,
   isTestPoint,
   netRoutedLengthMm,
   routeSegments,
+  WIDTH_EPSILON_MM,
   warn,
 } from "./circuit-index";
+import { ipc2221MinTraceWidthMm, requiredRailWidthMm } from "./net-rules";
 import type { CheckFinding } from "./types";
 
-/**
- * IPC-2221 trace width (mm) required for `currentA` at `tempRiseC`
- * and `copperOz` oz/ft^2 copper weight.
- */
-export function ipc2221MinTraceWidthMm(
-  currentA: number,
-  tempRiseC: number,
-  copperOz: number,
-  isInternal = false,
-): number {
-  if (currentA <= 0) return 0;
-
-  const k = isInternal ? 0.024 : 0.048;
-  const areaMil2 = (currentA / (k * tempRiseC ** 0.44)) ** (1 / 0.725);
-  const thicknessMil = copperOz * 1.378;
-  return (areaMil2 / thicknessMil) * 0.0254;
-}
-
-function requiredRailWidthMm(
-  rail: BoardSpec["powerRails"][number],
-  spec: BoardSpec,
-  isInternal: boolean,
-): number {
-  const ipcMin = ipc2221MinTraceWidthMm(
-    rail.maxCurrentA,
-    spec.electrical.maxTraceTempRiseC,
-    spec.dimensions.copperWeightOz,
-    isInternal,
-  );
-
-  return Math.max(ipcMin, rail.minTraceWidthMm ?? 0);
-}
+export { ipc2221MinTraceWidthMm };
 
 function checkPowerRailsAndShorts(idx: CircuitIndex, spec: BoardSpec): CheckFinding[] {
   const findings: CheckFinding[] = [];
@@ -99,16 +73,14 @@ function checkRailDecoupling(
     const railNet = idx.netByName.get(rail.net);
     if (!railNet) continue;
 
-    const hasCap = capacitors.some((cap) => {
-      const ports = idx.portsByCompId.get(cap.source_component_id) ?? [];
-      const onRail = ports.some((p) =>
-        idx.connMap.areIdsConnected(p.source_port_id, railNet.source_net_id),
-      );
-      const onGnd = ports.some((p) =>
-        idx.connMap.areIdsConnected(p.source_port_id, gndNet.source_net_id),
-      );
-      return onRail && onGnd;
-    });
+    const hasCap = capacitors.some((cap) =>
+      componentBridgesNets(
+        idx,
+        cap.source_component_id,
+        railNet.source_net_id,
+        gndNet.source_net_id,
+      ),
+    );
 
     if (!hasCap) {
       findings.push(
@@ -124,20 +96,38 @@ function checkRailDecoupling(
   return findings;
 }
 
-function checkIcDecouplingProximity(
+export function checkIcDecouplingProximity(
   idx: CircuitIndex,
   spec: BoardSpec,
   capacitors: any[],
 ): CheckFinding[] {
   const findings: CheckFinding[] = [];
   const chips = idx.sourceComponents.filter((c) => c.ftype === "simple_chip");
+  const gndNet = idx.netByName.get(spec.electrical.groundNetName);
+  const railNetIds = spec.powerRails
+    .map((r) => idx.netByName.get(r.net)?.source_net_id)
+    .filter((id): id is string => Boolean(id));
+
+  // Only count capacitors that actually bridge a power rail (or GND) as decoupling caps.
+  const decouplingCaps =
+    gndNet && railNetIds.length > 0
+      ? capacitors.filter((cap) =>
+          railNetIds.some((railId) =>
+            componentBridgesNets(idx, cap.source_component_id, railId, gndNet.source_net_id),
+          ),
+        )
+      : gndNet
+        ? capacitors.filter((cap) =>
+            componentOnNet(idx, cap.source_component_id, gndNet.source_net_id),
+          )
+        : capacitors;
 
   for (const chip of chips) {
     const chipPcb = idx.pcbBySourceId.get(chip.source_component_id);
     if (!chipPcb?.center) continue;
 
     let nearest = Number.POSITIVE_INFINITY;
-    for (const cap of capacitors) {
+    for (const cap of decouplingCaps) {
       const capPcb = idx.pcbBySourceId.get(cap.source_component_id);
       if (capPcb?.center) {
         nearest = Math.min(nearest, distanceMm(chipPcb.center, capPcb.center));
@@ -149,7 +139,7 @@ function checkIcDecouplingProximity(
         error(
           "power-integrity",
           "pi.decoupling.ic_missing",
-          `IC ${chip.name} has no decoupling capacitor on the board.`,
+          `IC ${chip.name} has no decoupling capacitor bridging a power rail to ${spec.electrical.groundNetName}.`,
         ),
       );
     } else if (nearest > spec.electrical.maxDecouplingDistanceMm) {
@@ -166,7 +156,7 @@ function checkIcDecouplingProximity(
   return findings;
 }
 
-function checkTraceAmpacity(idx: CircuitIndex, spec: BoardSpec): CheckFinding[] {
+export function checkTraceAmpacity(idx: CircuitIndex, spec: BoardSpec): CheckFinding[] {
   const findings: CheckFinding[] = [];
 
   for (const rail of spec.powerRails) {
@@ -188,15 +178,7 @@ function checkTraceAmpacity(idx: CircuitIndex, spec: BoardSpec): CheckFinding[] 
     const reqInternal = requiredRailWidthMm(rail, spec, true);
     if (reqExternal <= 0 && reqInternal <= 0) continue;
 
-    for (const pt of idx.pcbTraces) {
-      const st = idx.sourceTraceById.get(pt.source_trace_id);
-      const traceConnId = pt.source_trace_id || pt.pcb_trace_id;
-      const isRail =
-        Boolean(st?.connected_source_net_ids?.includes(railNet.source_net_id)) ||
-        idx.connMap.areIdsConnected(traceConnId, railNet.source_net_id);
-
-      if (!isRail) continue;
-
+    for (const pt of getPcbTracesForNet(idx, railNet.source_net_id)) {
       let totalLen = 0;
       let narrowLen = 0;
       let worstWidth = Number.POSITIVE_INFINITY;
@@ -205,11 +187,12 @@ function checkTraceAmpacity(idx: CircuitIndex, spec: BoardSpec): CheckFinding[] 
       for (const seg of routeSegments(pt)) {
         totalLen += seg.lengthMm;
         const reqWidth = seg.layer?.startsWith("inner") ? reqInternal : reqExternal;
+        const width = seg.widthMm ?? pt.trace_thickness;
 
-        if (seg.widthMm !== undefined && seg.widthMm < reqWidth - 1e-4) {
+        if (typeof width === "number" && width < reqWidth - WIDTH_EPSILON_MM) {
           narrowLen += seg.lengthMm;
-          if (seg.widthMm < worstWidth) {
-            worstWidth = seg.widthMm;
+          if (width < worstWidth) {
+            worstWidth = width;
             worstReq = reqWidth;
           }
         }
@@ -233,7 +216,7 @@ function checkTraceAmpacity(idx: CircuitIndex, spec: BoardSpec): CheckFinding[] 
   return findings;
 }
 
-function checkFloatingPins(idx: CircuitIndex, spec: BoardSpec): CheckFinding[] {
+export function checkFloatingPins(idx: CircuitIndex, spec: BoardSpec): CheckFinding[] {
   const findings: CheckFinding[] = [];
   const allowed = new Set(spec.electrical.allowedUnconnectedPins);
 
@@ -244,8 +227,12 @@ function checkFloatingPins(idx: CircuitIndex, spec: BoardSpec): CheckFinding[] {
 
     const netId = idx.connMap.getNetConnectedToId(port.source_port_id);
     const connected = netId ? idx.connMap.getIdsConnectedToNet(netId) : [];
+    const hasPeerOrNet = connected.some(
+      (id) =>
+        id !== port.source_port_id && (idx.sourcePortIdSet.has(id) || idx.sourceNetIdSet.has(id)),
+    );
 
-    if (connected.filter((id) => id !== port.source_port_id).length === 0) {
+    if (!hasPeerOrNet) {
       findings.push(
         warn(
           "electrical",
@@ -432,17 +419,15 @@ function checkSchematicLayout(idx: CircuitIndex): CheckFinding[] {
   return findings;
 }
 
-function checkBuses(idx: CircuitIndex, spec: BoardSpec): CheckFinding[] {
+export function checkBuses(idx: CircuitIndex, spec: BoardSpec): CheckFinding[] {
   const buses = spec.signalIntegrity.buses ?? [];
   if (buses.length === 0) return [];
 
   const findings: CheckFinding[] = [];
   const resistors = idx.sourceComponents.filter((c) => c.ftype === "simple_resistor");
-  const railNetIds = new Set(
-    spec.powerRails
-      .map((r) => idx.netByName.get(r.net)?.source_net_id)
-      .filter((id): id is string => Boolean(id)),
-  );
+  const railNetIds = spec.powerRails
+    .map((r) => idx.netByName.get(r.net)?.source_net_id)
+    .filter((id): id is string => Boolean(id));
 
   for (const bus of buses) {
     const resolvedNets = bus.nets.map((name) => ({
@@ -464,25 +449,19 @@ function checkBuses(idx: CircuitIndex, spec: BoardSpec): CheckFinding[] {
 
     const needsPullUps = bus.requirePullUps ?? bus.protocol === "i2c";
     if (needsPullUps) {
-      const targetRailId = bus.pullUpRail
-        ? idx.netByName.get(bus.pullUpRail)?.source_net_id
-        : undefined;
+      const targetRailIds = bus.pullUpRail
+        ? [idx.netByName.get(bus.pullUpRail)?.source_net_id].filter((id): id is string =>
+            Boolean(id),
+          )
+        : railNetIds;
 
       for (const { name, net } of resolvedNets) {
         if (!net) continue;
-        const hasPullUp = resistors.some((res) => {
-          const ports = idx.portsByCompId.get(res.source_component_id) ?? [];
-          const onBusNet = ports.some((p) =>
-            idx.connMap.areIdsConnected(p.source_port_id, net.source_net_id),
-          );
-          if (!onBusNet) return false;
-          if (targetRailId) {
-            return ports.some((p) => idx.connMap.areIdsConnected(p.source_port_id, targetRailId));
-          }
-          return ports.some((p) =>
-            [...railNetIds].some((railId) => idx.connMap.areIdsConnected(p.source_port_id, railId)),
-          );
-        });
+        const hasPullUp = resistors.some((res) =>
+          targetRailIds.some((railId) =>
+            componentBridgesNets(idx, res.source_component_id, net.source_net_id, railId),
+          ),
+        );
 
         if (!hasPullUp) {
           const railLabel = bus.pullUpRail ?? "a power rail";
@@ -501,16 +480,14 @@ function checkBuses(idx: CircuitIndex, spec: BoardSpec): CheckFinding[] {
       const first = resolvedNets[0].net;
       const second = resolvedNets[1].net;
       if (first && second) {
-        const hasTerm = resistors.some((res) => {
-          const ports = idx.portsByCompId.get(res.source_component_id) ?? [];
-          const onFirst = ports.some((p) =>
-            idx.connMap.areIdsConnected(p.source_port_id, first.source_net_id),
-          );
-          const onSecond = ports.some((p) =>
-            idx.connMap.areIdsConnected(p.source_port_id, second.source_net_id),
-          );
-          return onFirst && onSecond;
-        });
+        const hasTerm = resistors.some((res) =>
+          componentBridgesNets(
+            idx,
+            res.source_component_id,
+            first.source_net_id,
+            second.source_net_id,
+          ),
+        );
 
         if (!hasTerm) {
           findings.push(
@@ -528,7 +505,7 @@ function checkBuses(idx: CircuitIndex, spec: BoardSpec): CheckFinding[] {
   return findings;
 }
 
-function checkNetClassWidths(idx: CircuitIndex, spec: BoardSpec): CheckFinding[] {
+export function checkNetClassWidths(idx: CircuitIndex, spec: BoardSpec): CheckFinding[] {
   const netClasses = spec.netClasses ?? [];
   if (netClasses.length === 0) return [];
 
@@ -539,18 +516,11 @@ function checkNetClassWidths(idx: CircuitIndex, spec: BoardSpec): CheckFinding[]
       const net = idx.netByName.get(netName);
       if (!net) continue;
 
-      for (const pt of idx.pcbTraces) {
-        const st = idx.sourceTraceById.get(pt.source_trace_id);
-        const traceConnId = pt.source_trace_id || pt.pcb_trace_id;
-        const onNet =
-          Boolean(st?.connected_source_net_ids?.includes(net.source_net_id)) ||
-          idx.connMap.areIdsConnected(traceConnId, net.source_net_id);
-        if (!onNet) continue;
-
+      for (const pt of getPcbTracesForNet(idx, net.source_net_id)) {
         let flagged = false;
         for (const seg of routeSegments(pt)) {
           const width = seg.widthMm ?? pt.trace_thickness;
-          if (typeof width === "number" && width + 0.01 < nc.trackWidthMm) {
+          if (typeof width === "number" && width < nc.trackWidthMm - WIDTH_EPSILON_MM) {
             findings.push(
               error(
                 "signal-integrity",
@@ -571,18 +541,23 @@ function checkNetClassWidths(idx: CircuitIndex, spec: BoardSpec): CheckFinding[]
 }
 
 /** Runs electrical, power-integrity, thermal (IPC-2221), and signal-integrity heuristics. */
-export function runElectricalHeuristics(idx: CircuitIndex, spec: BoardSpec): CheckFinding[] {
+export function runElectricalHeuristics(
+  idx: CircuitIndex,
+  spec: BoardSpec,
+  options: { placementOnly?: boolean } = {},
+): CheckFinding[] {
+  const placementOnly = Boolean(options.placementOnly);
   const capacitors = idx.sourceComponents.filter((c) => c.ftype === "simple_capacitor");
 
   return [
     ...checkPowerRailsAndShorts(idx, spec),
     ...checkRailDecoupling(idx, spec, capacitors),
     ...checkIcDecouplingProximity(idx, spec, capacitors),
-    ...checkTraceAmpacity(idx, spec),
+    ...(placementOnly ? [] : checkTraceAmpacity(idx, spec)),
     ...checkFloatingPins(idx, spec),
-    ...checkSignalIntegrity(idx, spec),
+    ...(placementOnly ? [] : checkSignalIntegrity(idx, spec)),
     ...checkBuses(idx, spec),
-    ...checkNetClassWidths(idx, spec),
+    ...(placementOnly ? [] : checkNetClassWidths(idx, spec)),
     ...checkSilkscreen(idx),
     ...checkTestPointCoverage(idx, spec),
     ...checkSchematicLayout(idx),

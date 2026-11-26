@@ -1,5 +1,7 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
+export PATH := justfile_directory() / "node_modules/.bin:" + env_var("PATH")
+
 entry := "src/boards/main.circuit.tsx"
 exports_dir := justfile_directory() / "dist/exports"
 routing_dir := justfile_directory() / "dist/routing"
@@ -79,19 +81,19 @@ check-preview:
     tscircuit-cli export -f schematic-svg -o "{{ justfile_directory() / 'dist/preview/schematic.svg' }}" "{{ entry }}"
     tscircuit-cli export -f pcb-svg -o "{{ justfile_directory() / 'dist/preview/pcb.svg' }}" "{{ entry }}"
 
-# Independent KiCad CLI DRC cross-check (syncs fabRules, refills zones, saves filled board)
+# Independent KiCad CLI DRC cross-check (syncs fabRules/netClasses, refills zones, saves filled board & zip)
 [group('check')]
 check-kicad: export-kicad
     kicad-cli pcb drc --refill-zones --save-board --format json --output "{{ exports_dir }}/kicad-drc.json" "{{ exports_dir }}/board.kicad_pcb"
-
+    zip -q -j "{{ exports_dir }}/kicad-project.zip" "{{ exports_dir }}/board.kicad_pcb" "{{ exports_dir }}/board.kicad_sch" "{{ exports_dir }}/board.kicad_pro"
     tsx scripts/check-kicad-drc.ts "{{ exports_dir }}/kicad-drc.json"
 
-# Run TDD constraints, DRC, electrical/SI/PI/thermal & cached SPICE test suites
+# Run framework unit tests, TDD constraints, DRC, electrical/SI/PI/thermal & cached SPICE suites
 [group('check')]
 test:
-    node --import tsx --test tests/*.test.ts
+    node --import tsx --test checks/*.test.ts tests/*.test.ts
 
-# Full verification gate: TypeScript + formatting/lint + TDD tests
+# Full verification pass: TypeScript + formatting/lint + TDD tests
 [group('check')]
 verify:
     tsc --noEmit
@@ -114,7 +116,7 @@ route-tune:
 
 # --- Release Exports ---
 
-# Export KiCad PCB, schematic, fab-aligned .kicad_pro design rules, and project archive
+# Export KiCad PCB, schematic, and fab-aligned .kicad_pro design rules (run check-kicad to fill zones & zip)
 [group('export')]
 export-kicad:
     mkdir -p "{{ exports_dir }}"
@@ -122,7 +124,6 @@ export-kicad:
     tscircuit-cli export -f kicad_pcb -o "{{ exports_dir }}/board.kicad_pcb" "{{ entry }}"
     tscircuit-cli export -f kicad_sch -o "{{ exports_dir }}/board.kicad_sch" "{{ entry }}"
     tsx scripts/sync-kicad-project.ts "{{ exports_dir }}/board.kicad_pro"
-    zip -q -j "{{ exports_dir }}/kicad-project.zip" "{{ exports_dir }}/board.kicad_pcb" "{{ exports_dir }}/board.kicad_sch" "{{ exports_dir }}/board.kicad_pro"
 
 # Export fabrication Gerbers + Excellon drill archive from the zone-filled KiCad PCB
 [group('export')]

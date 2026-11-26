@@ -1,6 +1,15 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
-import { type CircuitIndex, indexCircuit } from "../checks/circuit-index";
+import { existsSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import {
+  type CircuitIndex,
+  fromKicadLayer,
+  indexCircuit,
+  isDirectRun,
+  portSelector,
+  readJson,
+  writeJson,
+} from "../checks/circuit-index";
+import { loadOrCompileCircuit, loadSpec } from "../checks/index";
 
 type SExpr = string | SExpr[];
 
@@ -63,9 +72,18 @@ function parseSexpr(input: string): SExpr[] {
       i += 1;
     } else if (ch === '"') {
       let end = i + 1;
-      while (end < input.length && input[end] !== '"') end += 1;
-      stack[stack.length - 1].push(input.slice(i + 1, end));
-      i = end + 1;
+      let str = "";
+      while (end < input.length && input[end] !== '"') {
+        if (input[end] === "\\" && end + 1 < input.length) {
+          str += input[end + 1];
+          end += 2;
+        } else {
+          str += input[end];
+          end += 1;
+        }
+      }
+      stack[stack.length - 1].push(str);
+      i = end < input.length ? end + 1 : input.length;
     } else {
       let end = i;
       while (end < input.length && !/[\s()"]/.test(input[end])) end += 1;
@@ -82,14 +100,6 @@ function findChild(list: SExpr[], tag: string): SExpr[] | undefined {
     if (Array.isArray(item) && item[0] === tag) return item;
   }
   return undefined;
-}
-
-function mapLayer(kicadLayer: string): string {
-  if (kicadLayer === "F.Cu") return "top";
-  if (kicadLayer === "B.Cu") return "bottom";
-  const inner = kicadLayer.match(/^In(\d+)\.Cu$/i);
-  if (inner) return `inner${inner[1]}`;
-  return kicadLayer.toLowerCase();
 }
 
 function toMmScale(routesNode: SExpr[]): number {
@@ -242,14 +252,14 @@ function buildPortAnchors(idx: CircuitIndex | null): PortAnchor[] {
     const comp = sp ? idx.compById.get(sp.source_component_id) : undefined;
     if (!comp?.name || !sp?.name) continue;
 
-    const bounds = padBoundsByPort.get(pp.pcb_port_id) ?? { halfW: 0.35, halfH: 0.35, layer: null };
+    const bounds = padBoundsByPort.get(pp.pcb_port_id) ?? { halfW: 0.15, halfH: 0.15, layer: null };
     anchors.push({
       x: pp.x,
       y: pp.y,
-      halfW: Math.max(bounds.halfW, 0.35),
-      halfH: Math.max(bounds.halfH, 0.35),
+      halfW: Math.max(bounds.halfW, 0.1),
+      halfH: Math.max(bounds.halfH, 0.1),
       layer: bounds.layer,
-      selector: `.${comp.name} > port.${sp.name}`,
+      selector: portSelector(comp.name, sp.name),
     });
   }
 
@@ -264,7 +274,7 @@ function findMatchingPort(pt: RoutePoint, anchors: PortAnchor[]): PortAnchor | n
     if (anchor.layer && ptLayer && anchor.layer !== ptLayer) continue;
     const dx = Math.abs(pt.x - anchor.x);
     const dy = Math.abs(pt.y - anchor.y);
-    if (dx > anchor.halfW + 0.15 || dy > anchor.halfH + 0.15) continue;
+    if (dx > anchor.halfW + 0.08 || dy > anchor.halfH + 0.08) continue;
 
     const dist = Math.hypot(dx, dy);
     if (!best || dist < best.dist) best = { anchor, dist };
@@ -300,96 +310,106 @@ function snapRouteEndpoints(
   return { startPort, endPort };
 }
 
-const sesPath = resolve(process.cwd(), process.argv[2] ?? "dist/routing/board.ses");
-const outPath = resolve(process.cwd(), process.argv[3] ?? "src/routing/board-routes.json");
-const circuitJsonPath = resolve(process.cwd(), process.argv[4] ?? "dist/circuit.json");
+async function main(): Promise<void> {
+  const sesPath = resolve(process.cwd(), process.argv[2] ?? "dist/routing/board.ses");
+  const outPath = resolve(process.cwd(), process.argv[3] ?? "src/routing/board-routes.json");
+  const circuitJsonPath = resolve(process.cwd(), process.argv[4] ?? "dist/circuit.json");
 
-if (!existsSync(sesPath)) {
-  console.error(`[IMPORT-SES] SES file not found: ${sesPath}`);
-  process.exit(1);
-}
-
-const ast = parseSexpr(readFileSync(sesPath, "utf8"));
-const session = findChild(ast, "session");
-const routesNode = session ? findChild(session, "routes") : undefined;
-const networkOut = routesNode ? findChild(routesNode, "network_out") : undefined;
-
-if (!routesNode || !networkOut) {
-  console.error("[IMPORT-SES] Invalid SES structure: missing (routes (network_out ...)).");
-  process.exit(1);
-}
-
-const scale = toMmScale(routesNode);
-const idx = existsSync(circuitJsonPath)
-  ? indexCircuit(JSON.parse(readFileSync(circuitJsonPath, "utf8")) as any[])
-  : null;
-const anchors = buildPortAnchors(idx);
-const usedConnections = new Set<string>();
-const trunks: PcbTracePath[] = [];
-const branches: PcbTracePath[] = [];
-
-for (const item of networkOut.slice(1)) {
-  if (!Array.isArray(item) || item[0] !== "net" || typeof item[1] !== "string") continue;
-  const netName = item[1].replace(/_source_net_\d+$/, "");
-  const vias: ViaPoint[] = [];
-  const wires: WireChain[] = [];
-
-  for (const child of item.slice(2)) {
-    if (!Array.isArray(child)) continue;
-
-    if (child[0] === "via" && typeof child[1] === "string") {
-      const { outerMm, holeMm } = parseViaDims(child[1]);
-      vias.push({ x: Number(child[2]) * scale, y: Number(child[3]) * scale, outerMm, holeMm });
-    } else if (child[0] === "wire") {
-      const pathNode = findChild(child, "path");
-      if (!pathNode || typeof pathNode[1] !== "string") continue;
-
-      const coords = pathNode.slice(3).map(Number);
-      if (coords.length < 4) continue;
-
-      const points: Array<{ x: number; y: number }> = [];
-      for (let i = 0; i + 1 < coords.length; i += 2) {
-        points.push({ x: coords[i] * scale, y: coords[i + 1] * scale });
-      }
-      wires.push({
-        layer: mapLayer(pathNode[1]),
-        width: Number((Number(pathNode[2]) * scale).toFixed(4)),
-        points,
-      });
-    }
+  if (!existsSync(sesPath)) {
+    console.error(`[IMPORT-SES] SES file not found: ${sesPath}`);
+    process.exit(1);
   }
 
-  for (let route of stitchNetRoutes(wires, vias)) {
-    let { startPort, endPort } = snapRouteEndpoints(route, anchors);
-    if (!startPort && endPort) {
-      route = reverseRoute(route);
-      [startPort, endPort] = [endPort, startPort];
-    }
+  const ast = parseSexpr(readFileSync(sesPath, "utf8"));
+  const session = findChild(ast, "session");
+  const routesNode = session ? findChild(session, "routes") : undefined;
+  const networkOut = routesNode ? findChild(routesNode, "network_out") : undefined;
 
-    const candidates = [startPort?.selector, endPort?.selector].filter((s): s is string =>
-      Boolean(s),
-    );
-    let connection = candidates.find((s) => !usedConnections.has(s));
+  if (!routesNode || !networkOut) {
+    console.error("[IMPORT-SES] Invalid SES structure: missing (routes (network_out ...)).");
+    process.exit(1);
+  }
 
-    if (!connection) {
-      let n = 0;
-      connection = `net.${netName}`;
-      while (usedConnections.has(connection)) {
-        n += 1;
-        connection = `net.${netName}#${n}`;
+  const scale = toMmScale(routesNode);
+  let idx: CircuitIndex | null = null;
+  if (existsSync(circuitJsonPath)) {
+    idx = indexCircuit(readJson<any[]>(circuitJsonPath));
+  } else if (existsSync(resolve(process.cwd(), "specs/board.spec.json"))) {
+    const spec = loadSpec("specs/board.spec.json");
+    idx = indexCircuit(await loadOrCompileCircuit(spec.entrypoint));
+  }
+
+  const anchors = buildPortAnchors(idx);
+  const usedConnections = new Set<string>();
+  const trunks: PcbTracePath[] = [];
+  const branches: PcbTracePath[] = [];
+
+  for (const item of networkOut.slice(1)) {
+    if (!Array.isArray(item) || item[0] !== "net" || typeof item[1] !== "string") continue;
+    const netName = item[1].replace(/_source_net_\d+$/, "");
+    const vias: ViaPoint[] = [];
+    const wires: WireChain[] = [];
+
+    for (const child of item.slice(2)) {
+      if (!Array.isArray(child)) continue;
+
+      if (child[0] === "via" && typeof child[1] === "string") {
+        const { outerMm, holeMm } = parseViaDims(child[1]);
+        vias.push({ x: Number(child[2]) * scale, y: Number(child[3]) * scale, outerMm, holeMm });
+      } else if (child[0] === "wire") {
+        const pathNode = findChild(child, "path");
+        if (!pathNode || typeof pathNode[1] !== "string") continue;
+
+        const coords = pathNode.slice(3).map(Number);
+        if (coords.length < 4) continue;
+
+        const points: Array<{ x: number; y: number }> = [];
+        for (let i = 0; i + 1 < coords.length; i += 2) {
+          points.push({ x: coords[i] * scale, y: coords[i + 1] * scale });
+        }
+        wires.push({
+          layer: fromKicadLayer(pathNode[1]),
+          width: Number((Number(pathNode[2]) * scale).toFixed(4)),
+          points,
+        });
       }
     }
 
-    usedConnections.add(connection);
-    const entry: PcbTracePath = { connection, route };
-    if (startPort && endPort) trunks.push(entry);
-    else branches.push(entry);
+    for (let route of stitchNetRoutes(wires, vias)) {
+      let { startPort, endPort } = snapRouteEndpoints(route, anchors);
+      if (!startPort && endPort) {
+        route = reverseRoute(route);
+        [startPort, endPort] = [endPort, startPort];
+      }
+
+      const candidates = [startPort?.selector, endPort?.selector].filter((s): s is string =>
+        Boolean(s),
+      );
+      let connection = candidates.find((s) => !usedConnections.has(s));
+
+      if (!connection) {
+        let n = 0;
+        connection = `net.${netName}`;
+        while (usedConnections.has(connection)) {
+          n += 1;
+          connection = `net.${netName}#${n}`;
+        }
+      }
+
+      usedConnections.add(connection);
+      const entry: PcbTracePath = { connection, route };
+      if (startPort && endPort) trunks.push(entry);
+      else branches.push(entry);
+    }
   }
+
+  const tracePaths = [...trunks, ...branches];
+  writeJson(outPath, tracePaths);
+  console.log(
+    `[IMPORT-SES] Imported ${tracePaths.length} stitched paths (${trunks.length} port-to-port, ${branches.length} branches) -> ${outPath}`,
+  );
 }
 
-const tracePaths = [...trunks, ...branches];
-mkdirSync(dirname(outPath), { recursive: true });
-writeFileSync(outPath, `${JSON.stringify(tracePaths, null, 2)}\n`);
-console.log(
-  `[IMPORT-SES] Imported ${tracePaths.length} stitched paths (${trunks.length} port-to-port, ${branches.length} branches) -> ${outPath}`,
-);
+if (isDirectRun(import.meta.url)) {
+  await main();
+}

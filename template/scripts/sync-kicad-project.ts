@@ -1,7 +1,7 @@
-import { mkdirSync, writeFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
-import { ipc2221MinTraceWidthMm } from "../checks/electrical-heuristics";
+import { basename, resolve } from "node:path";
+import { writeJson } from "../checks/circuit-index";
 import { loadSpec } from "../checks/index";
+import { resolveNetClassRules } from "../checks/net-rules";
 
 /**
  * Generates a KiCad `.kicad_pro` file whose design rules, Default netclass,
@@ -38,50 +38,22 @@ const classes: KicadNetClass[] = [
 
 const netclassAssignments: Record<string, string> = {};
 
-for (const nc of spec.netClasses ?? []) {
+for (const nc of resolveNetClassRules(spec)) {
   const entry: KicadNetClass = {
-    clearance: nc.clearanceMm ?? fab.minClearanceMm,
+    clearance: nc.clearanceMm,
     name: nc.name,
-    track_width: nc.trackWidthMm ?? fab.minTraceWidthMm,
-    via_diameter: nc.viaDiameterMm ?? fab.minViaDiameterMm,
-    via_drill: nc.viaDrillMm ?? fab.minViaDrillMm,
+    track_width: nc.trackWidthMm,
+    via_diameter: nc.viaDiameterMm,
+    via_drill: nc.viaDrillMm,
   };
-  if (nc.diffPairGapMm) {
+  if (nc.diffPairGapMm !== undefined) {
     entry.diff_pair_gap = nc.diffPairGapMm;
-    entry.diff_pair_width = nc.trackWidthMm ?? fab.minTraceWidthMm;
+    entry.diff_pair_width = nc.trackWidthMm;
   }
   classes.push(entry);
   for (const net of nc.nets) {
     netclassAssignments[net] = nc.name;
   }
-}
-
-for (const rail of spec.powerRails) {
-  if (netclassAssignments[rail.net]) continue;
-
-  const reqWidthMm = Math.max(
-    ipc2221MinTraceWidthMm(
-      rail.maxCurrentA,
-      spec.electrical.maxTraceTempRiseC,
-      spec.dimensions.copperWeightOz,
-    ),
-    rail.minTraceWidthMm ?? 0,
-  );
-  const reqClearanceMm = Math.max(fab.minClearanceMm, rail.minClearanceMm ?? 0);
-
-  if (reqWidthMm <= fab.minTraceWidthMm + 1e-3 && reqClearanceMm <= fab.minClearanceMm + 1e-3) {
-    continue;
-  }
-
-  const className = `rail_${rail.net}`;
-  classes.push({
-    clearance: Number(reqClearanceMm.toFixed(4)),
-    name: className,
-    track_width: Number(Math.max(fab.minTraceWidthMm, reqWidthMm).toFixed(4)),
-    via_diameter: fab.minViaDiameterMm,
-    via_drill: fab.minViaDrillMm,
-  });
-  netclassAssignments[rail.net] = className;
 }
 
 const kicadProject = {
@@ -109,13 +81,12 @@ const kicadProject = {
       : {}),
   },
   meta: {
-    filename: "board.kicad_pro",
+    filename: basename(outPath),
     version: 1,
   },
 };
 
-mkdirSync(dirname(outPath), { recursive: true });
-writeFileSync(outPath, `${JSON.stringify(kicadProject, null, 2)}\n`);
+writeJson(outPath, kicadProject);
 console.log(
   `[KICAD] Synced ${fab.fabHouse} design rules (${classes.length} netclass(es)) -> ${outPath}`,
 );

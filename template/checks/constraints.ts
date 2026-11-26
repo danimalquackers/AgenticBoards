@@ -1,5 +1,15 @@
 import type { BoardSpec } from "../specs/board-spec.schema";
-import { type CircuitIndex, error, isTestPoint, warn } from "./circuit-index";
+import {
+  type CircuitIndex,
+  error,
+  getKeepoutBox,
+  isTestPoint,
+  keepoutMatchesLayer,
+  routeSegments,
+  segmentIntersectsBox,
+  WIDTH_EPSILON_MM,
+  warn,
+} from "./circuit-index";
 import type { BoardMetrics, BomSummary, CheckFinding } from "./types";
 
 export interface ConstraintCheckOutput {
@@ -137,23 +147,17 @@ function checkMountingHoles(idx: CircuitIndex, spec: BoardSpec): CheckFinding[] 
   return findings;
 }
 
-function checkKeepoutZones(idx: CircuitIndex, spec: BoardSpec): CheckFinding[] {
+export function checkKeepoutZones(idx: CircuitIndex, spec: BoardSpec): CheckFinding[] {
   const findings: CheckFinding[] = [];
 
   for (const zone of spec.keepoutZones) {
-    const zMinX = zone.xMm - zone.widthMm / 2;
-    const zMaxX = zone.xMm + zone.widthMm / 2;
-    const zMinY = zone.yMm - zone.heightMm / 2;
-    const zMaxY = zone.yMm + zone.heightMm / 2;
-    const zoneLayers = new Set<string>(zone.layers);
-    const appliesToAll = zoneLayers.has("all");
-    const layerMatches = (layer: string) => appliesToAll || zoneLayers.has(layer);
+    const box = getKeepoutBox(zone);
     const boxOverlaps = (x: number, y: number, hw: number, hh: number) =>
-      x + hw > zMinX && x - hw < zMaxX && y + hh > zMinY && y - hh < zMaxY;
+      x + hw > box.minX && x - hw < box.maxX && y + hh > box.minY && y - hh < box.maxY;
 
     for (const comp of idx.pcbComponents) {
       const compLayer = typeof comp.layer === "string" ? comp.layer : "top";
-      if (!layerMatches(compLayer)) continue;
+      if (!keepoutMatchesLayer(zone, compLayer)) continue;
 
       const cx = comp.center?.x ?? 0;
       const cy = comp.center?.y ?? 0;
@@ -186,21 +190,45 @@ function checkKeepoutZones(idx: CircuitIndex, spec: BoardSpec): CheckFinding[] {
     }
 
     for (const trace of idx.pcbTraces) {
-      for (const seg of trace.route ?? []) {
-        const layer = typeof seg?.layer === "string" ? seg.layer : "top";
-        if (!layerMatches(layer)) continue;
+      let violated = false;
 
-        const r = typeof seg?.width === "number" ? seg.width / 2 : 0;
-        if (
-          typeof seg?.x === "number" &&
-          typeof seg?.y === "number" &&
-          boxOverlaps(seg.x, seg.y, r, r)
-        ) {
+      // Check full wire segments (catches pass-through traces whose endpoints lie outside the zone).
+      for (const seg of routeSegments(trace)) {
+        const layer = seg.layer ?? "top";
+        if (!keepoutMatchesLayer(zone, layer)) continue;
+
+        const r = (seg.widthMm ?? trace.trace_thickness ?? 0) / 2;
+        if (segmentIntersectsBox(seg.a, seg.b, box, r)) {
           findings.push(
             error(
               "mechanical",
               "mechanical.keepout.trace",
               `Trace ${trace.pcb_trace_id} (${layer}) intrudes into keepout zone "${zone.name}".`,
+            ),
+          );
+          violated = true;
+          break;
+        }
+      }
+
+      if (violated) continue;
+
+      // Also check via points embedded in trace.route across their from_layer / to_layer.
+      for (const pt of trace.route ?? []) {
+        if (pt?.route_type !== "via" || typeof pt.x !== "number" || typeof pt.y !== "number") {
+          continue;
+        }
+        const viaLayers = [pt.from_layer, pt.to_layer].filter(
+          (l): l is string => typeof l === "string",
+        );
+        const hitsLayer =
+          viaLayers.length === 0 || viaLayers.some((l) => keepoutMatchesLayer(zone, l));
+        if (hitsLayer && boxOverlaps(pt.x, pt.y, 0, 0)) {
+          findings.push(
+            error(
+              "mechanical",
+              "mechanical.keepout.trace",
+              `Trace ${trace.pcb_trace_id} via intrudes into keepout zone "${zone.name}".`,
             ),
           );
           break;
@@ -231,9 +259,9 @@ function collectRoutedPcbPorts(routedTraces: any[]): Set<string> {
   return portIds;
 }
 
-function checkUnroutedTraces(idx: CircuitIndex): CheckFinding[] {
+export function checkUnroutedTraces(idx: CircuitIndex): CheckFinding[] {
   // Skip cascade noise when placement errors already blocked autorouting.
-  if (idx.raw.some((el) => el?.type === "pcb_autorouting_error")) return [];
+  if (idx.hasAutoroutingError) return [];
 
   const routedTraces = idx.pcbTraces.filter((t) => (t.route?.length ?? 0) >= 2);
   const routedSourceTraceIds = new Set(
@@ -271,7 +299,7 @@ function checkUnroutedTraces(idx: CircuitIndex): CheckFinding[] {
   return findings;
 }
 
-function checkTraceFabRules(
+export function checkTraceFabRules(
   idx: CircuitIndex,
   spec: BoardSpec,
   violatesEdge: (x: unknown, y: unknown, radius: number) => boolean,
@@ -281,18 +309,19 @@ function checkTraceFabRules(
 
   for (const trace of idx.pcbTraces) {
     for (const seg of trace.route ?? []) {
-      if (typeof seg.width === "number" && seg.width < minTraceWidthMm - 1e-4) {
+      const width = typeof seg.width === "number" ? seg.width : trace.trace_thickness;
+      if (typeof width === "number" && width < minTraceWidthMm - WIDTH_EPSILON_MM) {
         findings.push(
           error(
             "fab",
             "fab.trace_width.min",
-            `Trace ${trace.pcb_trace_id} width ${seg.width}mm < fab min ${minTraceWidthMm}mm.`,
+            `Trace ${trace.pcb_trace_id} width ${width}mm < fab min ${minTraceWidthMm}mm.`,
           ),
         );
         break;
       }
 
-      const halfWidth = typeof seg.width === "number" ? seg.width / 2 : 0;
+      const halfWidth = typeof width === "number" ? width / 2 : 0;
       if (violatesEdge(seg.x, seg.y, halfWidth)) {
         findings.push(
           error(
@@ -309,7 +338,7 @@ function checkTraceFabRules(
   return findings;
 }
 
-function checkViaFabRules(
+export function checkViaFabRules(
   idx: CircuitIndex,
   spec: BoardSpec,
   violatesEdge: (x: unknown, y: unknown, radius: number) => boolean,
@@ -318,7 +347,10 @@ function checkViaFabRules(
   const findings: CheckFinding[] = [];
 
   for (const via of idx.pcbVias) {
-    if (typeof via.hole_diameter === "number" && via.hole_diameter < minViaDrillMm) {
+    if (
+      typeof via.hole_diameter === "number" &&
+      via.hole_diameter < minViaDrillMm - WIDTH_EPSILON_MM
+    ) {
       findings.push(
         error(
           "fab",
@@ -328,7 +360,10 @@ function checkViaFabRules(
       );
     }
 
-    if (typeof via.outer_diameter === "number" && via.outer_diameter < minViaDiameterMm) {
+    if (
+      typeof via.outer_diameter === "number" &&
+      via.outer_diameter < minViaDiameterMm - WIDTH_EPSILON_MM
+    ) {
       findings.push(
         error(
           "fab",

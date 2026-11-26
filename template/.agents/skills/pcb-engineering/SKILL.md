@@ -1,72 +1,48 @@
 ---
 name: pcb-engineering
 description: >-
-  Hardware engineering guidelines: research real in-stock components within budget,
-  import verified footprints and 3D models, include all fab-ready support circuitry
-  (protection, decoupling, pull-ups, test points, silkscreen, thermals), and prove
-  electrical behavior via ngspice SPICE simulations.
+  Hardware engineering reference: part selection, BOM verification, support
+  circuitry, domain layout playbooks, schematic clarity, and ngspice SPICE
+  simulation. Use while selecting parts, authoring subcircuits, or building
+  testbenches. Do not use for read-only audits (`pcb-review`).
 ---
 
-# Hardware Engineering & Fab-Ready Checklist
+# Hardware Engineering & Fab-Ready Reference
 
-Every completed board must be **ready to fabricate and assemble** — never omit
-the supporting components required for reliable Rev-1 hardware.
+Every completed board must be ready to fabricate and assemble on Rev-1.
 
 ## Domain Reference Packs (Load Only What Applies)
 
-Read the matching reference under `references/` **before** laying out specialized subsystems:
+Read the matching file under `references/` **before** laying out specialized subsystems:
 
-| Subsystem / Design Class                               | Reference                              |
-| :----------------------------------------------------- | :------------------------------------- |
-| tscircuit JSX, footprints, courtyards, routing, SPICE  | `references/tscircuit-reference.md`    |
-| Buck/boost/charger, motor drivers, rails > 1 A         | `references/power-electronics.md`      |
-| USB-C/2.0/3.x, Ethernet, CAN/RS-485, SPI/SDIO > 20 MHz | `references/high-speed-interfaces.md`  |
-| BLE, Wi-Fi, LoRa, GNSS, PCB/chip antennas, 50 Ω feeds  | `references/rf-wireless.md`            |
-| Precision ADCs/DACs, op-amps, sensors, audio, VREF     | `references/analog-mixed-signal.md`    |
-| > 48 V DC, AC mains, PoE, galvanic isolation barriers  | `references/high-voltage-isolation.md` |
+| Subsystem / Design Class                                       | Reference                              |
+| :------------------------------------------------------------- | :------------------------------------- |
+| tscircuit JSX, footprints, courtyards, schematic layout, SPICE | `references/tscircuit-reference.md`    |
+| Buck/boost/charger, motor drivers, rails > 1 A                 | `references/power-electronics.md`      |
+| USB-C/2.0/3.x, Ethernet, CAN/RS-485, SPI/SDIO > 20 MHz         | `references/high-speed-interfaces.md`  |
+| BLE, Wi-Fi, LoRa, GNSS, PCB/chip antennas, 50 Ω feeds          | `references/rf-wireless.md`            |
+| Precision ADCs/DACs, op-amps, sensors, audio, VREF             | `references/analog-mixed-signal.md`    |
+| > 48 V DC, AC mains, PoE, galvanic isolation barriers          | `references/high-voltage-isolation.md` |
 
-## 1. Real Parts, Footprints & 3D Models
+## 1. Real Parts, Pinouts & Spec Rules
 
-- Pick real, in-stock parts (prefer JLCPCB Basic Parts for passives). Derate
-  capacitors >=2x working voltage (accounts for X5R/X7R DC-bias loss) and
-  resistors >=2x expected power.
-- Search, verify, and import footprints/3D models into `src/components/`:
-  - Batch search multiple parts in parallel: `just parts-search "<part1>" "<part2>" ...`
-  - Audit all `specs/board.spec.json` BOM LCSC/MPN entries: `just parts-verify`
-  - Single search / import / convert: `tsci search "<part>"` | `tsci import "<LCSC_C_NUMBER>"` | `tsci convert <file.kicad_mod>`
-- Verify every IC pinout and polarity (diode cathode, LED, polarized caps, MOSFET
-  pinout) against its datasheet. Record every placed designator's MPN, LCSC,
-  `heightMm`, and unit price in `specs/board.spec.json -> budget.bomCosts`.
-- Declare specialized net rules in `specs/board.spec.json`: `netClasses` (per-net
-  width/clearance/impedance), `dimensions.stackup` (e.g. `"JLC04161H-7628"`), and
-  `signalIntegrity.buses` (I2C pull-ups, CAN/RS-485 termination) so Freerouting,
-  KiCad DRC, and TDD checks enforce them automatically.
+- Pick real, in-stock parts (prefer JLCPCB Basic Parts for passives). Derate capacitors >= 2× working voltage (X5R/X7R DC-bias) and resistors >= 2× power.
+- Search and import parts into `src/components/`:
+  - Batch search: `just parts-search "<part1>" "<part2>" ...`
+  - Audit BOM entries in `specs/board.spec.json`: `just parts-verify`
+  - Import/convert footprints: `tscircuit-cli import "<LCSC_C_NUMBER>"` | `tscircuit-cli convert <file.kicad_mod>` (in Nix shells, `tsci` is an alias for `tscircuit-cli`).
+- Verify every IC pinout and polarity (diode cathode, LED, polarized cap, MOSFET G/D/S) against its datasheet. Record `mpn`, `lcsc`, `heightMm`, and `unitCostUsd` for every placed designator in `specs/board.spec.json -> budget.bomCosts`.
+- Declare specialized rules in `specs/board.spec.json` (`netClasses`, `dimensions.stackup`, `signalIntegrity.buses`) so Freerouting, KiCad DRC, and TDD checks enforce them automatically.
 
-## 2. Mandatory Fab-Ready Support Circuitry
+## 2. Baseline Production Support Circuitry
 
-- **Power & Protection**:
-  - Reverse-polarity protection (Schottky / P-FET) + resettable polyfuse/fuse on external power inputs.
-  - ESD/TVS diodes on ALL exposed external connectors (USB D+/D-/VBUS, GPIO, power).
-  - **USB-C sink/UFP**: ALWAYS add separate `5.1kΩ` pull-down resistors on BOTH `CC1` and `CC2` to `GND` (required for USB-C PD chargers to supply 5V).
-  - Bulk decoupling (`10uF–47uF`) at power entry/regulator outputs + local `100nF` bypass cap directly beside EVERY IC VCC/VDD pin.
-  - Ferrite bead / RC filter on analog rails (`VDDA`/`VREF`).
-- **Digital & Bring-Up Essentials**:
-  - `10kΩ` pull-up + `100nF` cap on `RESET/NRST`; required boot-strap resistors (`BOOT0`/`GPIO0`).
-  - `2.2k–4.7kΩ` pull-ups on open-drain buses (I2C SDA/SCL); `22–33Ω` series damping on fast clocks if needed.
-  - Crystal load capacitors sized via `C1 = C2 = 2 * (CL - Cstray)` placed right beside MCU oscillator pins.
-  - Programming/debug header (SWD/UART) + **test points in moderation**:
-    - Place accessible `<testpoint>` pads (`1.0 mm` SMD pad on compact boards, or a clippable loop for `GND` on larger boards) on `GND`, each primary power rail (`VBUS`/`VIN`, regulated outputs), and critical bring-up signals (`RESET/NRST`, key analog sense nodes) where board area allows.
-    - **Do not** add stub test points on high-speed differential pairs (USB SS/USB4, Ethernet, HDMI), RF antenna feeds, or every low-priority GPIO. Label every placed test point clearly in silkscreen.
-- **SI, Thermals & Physical Polish**:
-  - **4-layer stackup** (`Sig/GND/PWR/Sig`) for USB, RF, Ethernet, >20MHz SPI/clocks, or sensitive analog; keep ground plane unbroken and match differential pairs (`<= maxDiffPairSkewMm`).
-  - Size power traces per IPC-2221 (`checks/electrical-heuristics.ts` enforces ampacity). Switch LDO -> buck if `P_diss > 0.5W`; add thermal vias under hot QFN/SOT-223 pads.
-  - Maintain copper-to-edge clearance (`>= 0.3mm`), mounting-hole screw-head keepouts, clear silkscreen (board name/rev, connector pinouts, pin-1/polarity marks), and fiducials for fine-pitch QFN/BGA parts.
-- **Human-Readable Engineering Schematic**:
-  - Structure every schematic like a real engineering diagram: include `<schematicsheet sheetSize="A4">` (or `"ANSI_B"`), wrap each functional block in a titled `<schematicbox title="..." strokeStyle="dashed" overlay={[...]} />`, arrange blocks in a compact rectangular grid (not randomly scattered), add `<netlabel>`s and `<schematictext>` callouts, arrange IC/connector pins via `schPinArrangement`, and eliminate `schematic_component_styling_warning` overlaps. See `references/tscircuit-reference.md`.
+- **Power & Protection**: Reverse-polarity protection + polyfuse/fuse on external power inputs; ESD/TVS diodes on all exposed connectors; bulk decoupling (`10–47 uF`) at entry/regulator outputs + local `100 nF` bypass right beside every IC VCC/VDD pin; ferrite/RC filter on `VDDA`/`VREF`.
+- **Digital & Bring-Up**: `10 kΩ` pull-up + `100 nF` cap on `RESET/NRST`; required boot-strap resistors; `2.2–4.7 kΩ` pull-ups on open-drain buses (I2C); crystal load caps sized via `C1 = C2 = 2 * (CL - Cstray)` next to oscillator pins; programming/debug header (SWD/UART).
+- **Test Points (In Moderation)**: Place labeled `<testpoint>` pads (`1.0 mm` SMD or loop) on `GND`, primary power rails, and critical bring-up nodes where space permits. Keep high-speed differential pairs and RF feeds completely stub-free.
+- **Thermals, Stackup & Polish**: Use 4-layer (`Sig/GND/PWR/Sig`) for USB, RF, Ethernet, > 20 MHz clocks, or precision analog; switch LDO -> buck when `P_diss > 0.5 W`; add thermal vias under hot pads; keep `>= 0.3 mm` copper-to-edge clearance, clear silkscreen (board name/rev, connector pinouts, Pin-1/polarity marks), and fiducials for fine-pitch QFN/BGA.
+- **Engineering Schematic**: Frame with `<schematicsheet name="main" sheetSize="A4" />`, group blocks in titled `<schematicbox>` rectangles, and eliminate label overlaps (see `references/tscircuit-reference.md`).
 
 ## 3. Provable SPICE Simulation (`ngspice`)
 
-- Build testbenches in `src/simulations/<name>.sim.circuit.tsx` (`<voltagesource>`,
-  `<voltageprobe>`, `<analogsimulation spiceEngine="ngspice" />`) for power filters,
-  dividers, regulators, current limiters, and analog stages.
-- Declare pass/fail assertions in `specs/board.spec.json -> simulations[]` and prove via `just test`.
+- Build testbenches in `src/simulations/<name>.sim.circuit.tsx` for power filters, dividers, regulators, current limiters, and analog stages.
+- Declare pass/fail probe assertions in `specs/board.spec.json -> simulations[]` and prove them via `just test`.

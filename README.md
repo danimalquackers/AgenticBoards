@@ -84,17 +84,17 @@ flowchart TD
 
 ---
 
-## Automated Checks Enforced by `just verify`
+## Automated Checks (`just verify` & `just check-kicad`)
 
-| Category                                 | Automated Rules                                                                                                                                                                                                                                              |
-| :--------------------------------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Formatting & Linting (`treefmt-nix`)** | Opinionated Biome rules (`.ts`, `.tsx`, `.js`, `.mjs`, `.json`), Prettier (`.md`, `.yaml`), `nixfmt` (`.nix`), `just --fmt` (`justfile`), `shfmt` + `shellcheck` (`.sh`), plus `tsc --noEmit`                                                                |
-| **DRC & Routing**                        | Native Circuit JSON errors, `@tscircuit/checks` (trace overlaps, clearances, via spacing, courtyard overlap, out-of-board parts/traces), zero unrouted airwires (`drc.unrouted_trace`)                                                                       |
-| **Mechanical**                           | Max & exact board `width × height` with tolerance, layer count, mounting hole coordinates/diameters, keepout zone overlaps, optional 3D model coverage                                                                                                       |
-| **Fab & PCBA**                           | Min trace width, min via drill & outer diameter, copper-to-board-edge clearance (`minEdgeClearanceMm`), footprint coverage, LCSC/MPN part numbers, silkscreen labels                                                                                         |
-| **Budget**                               | Every placed component must be priced in `specs/board.spec.json -> budget.bomCosts`; fails if BOM or estimated total unit cost exceeds budget                                                                                                                |
-| **Electrical / PI / SI / Thermal**       | Power-to-GND dead-short detection, rail decoupling caps & IC decoupling proximity, IPC-2221 trace ampacity for `maxCurrentA` / `maxTraceTempRiseC`, floating pins, max trace lengths, differential-pair skew (`maxDiffPairSkewMm`), 4-layer stackup advisory |
-| **Simulation & Cross-DRC**               | `ngspice` analog simulation probe assertions (`avg`, `min`, `max`, `final`, `ripple`) + independent `kicad-cli pcb drc` error & unconnected-net gate                                                                                                         |
+| Category                                 | Automated Rules                                                                                                                                                                                                                                                            |
+| :--------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Formatting & Linting (`treefmt-nix`)** | Opinionated Biome rules (`.ts`, `.tsx`, `.js`, `.mjs`, `.json`), Prettier (`.md`, `.yaml`), `nixfmt` (`.nix`), `just --fmt` (`justfile`), `shfmt` + `shellcheck` (`.sh`), plus `tsc --noEmit`                                                                              |
+| **DRC & Routing**                        | Native Circuit JSON errors, `@tscircuit/checks` (trace overlaps, clearances, via spacing, courtyard overlap, out-of-board parts/traces), zero unrouted airwires (`drc.unrouted_trace`)                                                                                     |
+| **Mechanical**                           | Max & exact board `width × height` with tolerance, Z-height limits (`maxTopHeightMm` / `maxBottomHeightMm`), layer count, mounting hole coordinates/diameters, keepout zone segment & via overlaps, optional 3D model coverage                                             |
+| **Fab & PCBA**                           | Min trace width, min via drill & outer diameter, copper-to-board-edge clearance (`minEdgeClearanceMm`), footprint coverage, LCSC/MPN part numbers, silkscreen labels                                                                                                       |
+| **Budget**                               | Every placed component must be priced in `specs/board.spec.json -> budget.bomCosts`; fails if BOM or estimated total unit cost exceeds budget                                                                                                                              |
+| **Electrical / PI / SI / Thermal**       | Power-to-GND dead-short detection, rail & IC decoupling proximity, IPC-2221 trace ampacity, per-net `netClasses`, bus ERC (I2C pull-ups, CAN/RS-485 termination), floating pins, max trace lengths, differential-pair skew (`maxDiffPairSkewMm`), 4-layer stackup advisory |
+| **Simulation & KiCad Cross-DRC**         | `ngspice` analog simulation probe assertions (`avg`, `min`, `max`, `final`, `ripple`) in `just verify`; independent `kicad-cli pcb drc --refill-zones` error & unconnected-net check in `just check-kicad` / `just export-all`                                             |
 
 ---
 
@@ -103,24 +103,24 @@ flowchart TD
 All project tasks are standardized through **`just`** (`package.json` holds
 dependencies and metadata only):
 
-| Stage    | Command                                   | Purpose                                                                                        |
-| :------- | :---------------------------------------- | :--------------------------------------------------------------------------------------------- |
-| `setup`  | `just doctor`                             | Check toolchain binaries on `PATH`                                                             |
-| `setup`  | `just parts-search <q...>`                | Search LCSC/JLCPCB parts concurrently                                                          |
-| `dev`    | `just dev`                                | Start live tscircuit Schematic / PCB / 3D UI (`http://localhost:3020`)                         |
-| `dev`    | `just fmt` / `just lint`                  | Format or lint all file types (`treefmt`, or `biome` fallback)                                 |
-| `check`  | `just check-placement`                    | Fast placement, courtyard, keepout, Z-height, BOM & schematic check (skips autorouting)        |
-| `check`  | `just check` / `just check-summary`       | Full board verification scorecard / print grouped summary from `dist/checks-report.json`       |
-| `check`  | `just check-kicad`                        | Independent `kicad-cli pcb drc` gate (syncs `fabRules`, refills zones, saves filled board)     |
-| `check`  | `just test` / `just verify`               | Run TDD constraints + cached SPICE tests (`verify` adds `tsc --noEmit` + `just lint`)          |
-| `route`  | `just route` / `just route-tune`          | Headless 45° Freerouting (`src/routing/board-routes.json`) & differential-pair length matching |
-| `export` | `just export-kicad`                       | Export `board.kicad_pcb`, `board.kicad_sch`, `board.kicad_pro`, and `kicad-project.zip`        |
-| `export` | `just export-gerbers`                     | Export `gerbers.zip` from the KiCad-DRC-verified, zone-filled `board.kicad_pcb`                |
-| `export` | `just export-pcba`                        | Export JLCPCB `bom.csv` & Pick-and-Place CPL `pnp.csv`                                         |
-| `export` | `just export-renders` / `just export-3d`  | Export SVGs (`schematic`, `pcb`, `assembly`) / 3D CAD (`board.step`, `board.gltf`)             |
-| `export` | `just export-dsn` / `just export-netlist` | Export Specctra `board.dsn` / human-readable `netlist.txt`                                     |
-| `export` | `just export-docs`                        | Export `bringup-test-guide.md` (continuity, diode, resistance, voltage & SI reference)         |
-| `export` | `just export-all`                         | Full release pipeline: `verify` → `check-kicad` → zone-filled Gerbers → all exports & docs     |
+| Stage    | Command                                         | Purpose                                                                                        |
+| :------- | :---------------------------------------------- | :--------------------------------------------------------------------------------------------- |
+| `setup`  | `just doctor`                                   | Check toolchain binaries on `PATH`                                                             |
+| `setup`  | `just parts-search <q...>` / `parts-verify`     | Search LCSC/JLCPCB parts concurrently / audit `specs/board.spec.json` BOM SKUs                 |
+| `dev`    | `just dev`                                      | Start live tscircuit Schematic / PCB / 3D UI (`http://localhost:3020`)                         |
+| `dev`    | `just fmt` / `just lint`                        | Format or lint all file types (`treefmt`, or `biome` fallback)                                 |
+| `check`  | `just check-placement` / `check-preview`        | Fast placement/keepout/Z-height/BOM check (no routing) / fast preview SVGs (`dist/preview/`)   |
+| `check`  | `just check` / `check-summary` / `check-status` | Full board verification scorecard / grouped summary / compact JSON status snapshot             |
+| `check`  | `just check-kicad`                              | Independent `kicad-cli pcb drc` review (syncs rules/netclasses, refills zones, updates zip)    |
+| `check`  | `just test` / `just verify`                     | Run unit, TDD constraint & SPICE tests (`verify` adds `tsc --noEmit` + `just lint`)            |
+| `route`  | `just route` / `just route-tune`                | Headless 45° Freerouting (`src/routing/board-routes.json`) & differential-pair length matching |
+| `export` | `just export-kicad`                             | Export `board.kicad_pcb`, `board.kicad_sch`, `board.kicad_pro`                                 |
+| `export` | `just export-gerbers`                           | Export `gerbers.zip` from the KiCad-DRC-verified, zone-filled `board.kicad_pcb`                |
+| `export` | `just export-pcba`                              | Export JLCPCB `bom.csv` & Pick-and-Place CPL `pnp.csv`                                         |
+| `export` | `just export-renders` / `just export-3d`        | Export SVGs (`schematic`, `pcb`, `assembly`) / 3D CAD (`board.step`, `board.gltf`)             |
+| `export` | `just export-dsn` / `just export-netlist`       | Export Specctra `board.dsn` / human-readable `netlist.txt`                                     |
+| `export` | `just export-docs`                              | Export `bringup-test-guide.md` (continuity, diode, resistance, voltage & SI reference)         |
+| `export` | `just export-all`                               | Full release pipeline: `verify` → `check-kicad` → zone-filled Gerbers → all exports & docs     |
 
 ---
 
@@ -152,4 +152,4 @@ npx create-agentic-board --update .
 
 - `bin/create-agentic-board.mjs` — `commander`-based Node ESM scaffolder CLI
 - `flake.nix`, `treefmt.nix`, `biome.json`, `justfile`, `package.json` — Exposes `apps.default` (`nix run`), `templates.default` (`nix flake new`), `devShells.default`, `formatter` (`nix fmt`), `checks.formatting`, and npm `bin` (`npx`)
-- `template/` — Self-contained PCB project (`justfile`, `shell.nix`, `flake.nix`, `treefmt.nix`, `biome.json`, `specs/`, `src/`, `checks/`, `tests/`, `scripts/export-pcba.ts`, `.agents/`)
+- `template/` — Self-contained PCB project (`justfile`, `shell.nix`, `flake.nix`, `treefmt.nix`, `biome.json`, `specs/`, `src/`, `checks/`, `tests/`, `scripts/`, `.agents/`)

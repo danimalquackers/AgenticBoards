@@ -1,10 +1,12 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import {
   type CircuitIndex,
+  getPortNetName,
   indexCircuit,
   isTestPoint,
   netRoutedLengthMm,
+  readJson,
 } from "../checks/circuit-index";
 import { loadOrCompileCircuit, loadSpec } from "../checks/index";
 import type { SimulationRunResult } from "../checks/spice-runner";
@@ -12,9 +14,13 @@ import type { BoardSpec } from "../specs/board-spec.schema";
 
 type PowerRail = BoardSpec["powerRails"][number];
 
+function escapeMdCell(value: string): string {
+  return value.replaceAll("|", "\\|").replace(/\r?\n/g, " ");
+}
+
 function mdTable(headers: string[], rows: string[][]): string {
   const divider = headers.map(() => "---");
-  const row = (cols: string[]) => `| ${cols.join(" | ")} |`;
+  const row = (cols: string[]) => `| ${cols.map(escapeMdCell).join(" | ")} |`;
   return [row(headers), row(divider), ...rows.map(row)].join("\n");
 }
 
@@ -29,11 +35,8 @@ function componentNets(idx: CircuitIndex, compId: string): string[] {
   const nets = new Set<string>();
 
   for (const port of ports) {
-    for (const [netName, net] of idx.netByName.entries()) {
-      if (idx.connMap.areIdsConnected(port.source_port_id, net.source_net_id)) {
-        nets.add(netName);
-      }
-    }
+    const netName = getPortNetName(idx, port.source_port_id);
+    if (netName) nets.add(netName);
   }
 
   return [...nets];
@@ -233,7 +236,12 @@ function renderSimulationSection(): string | null {
   const simPath = resolve(process.cwd(), "dist/sim-report.json");
   if (!existsSync(simPath)) return null;
 
-  const results = JSON.parse(readFileSync(simPath, "utf8")) as SimulationRunResult[];
+  let results: SimulationRunResult[];
+  try {
+    results = readJson<SimulationRunResult[]>(simPath);
+  } catch {
+    return null;
+  }
   const rows = results.flatMap((sim) =>
     sim.assertionResults.map((a) => [
       `\`${sim.name}\``,

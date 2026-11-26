@@ -4,6 +4,7 @@ import {
   chmodSync,
   cpSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   readdirSync,
   readFileSync,
@@ -26,6 +27,7 @@ const SKIP_DIRS = new Set(["node_modules", "dist", ".direnv", ".git"]);
 // Framework files safe to overwrite during `--update` (never touches `src/`, `specs/board.spec.json`, `tests/`, or `package.json`).
 const MANAGED_PATHS = [
   ".agents",
+  ".gitignore",
   "AGENTS.md",
   "checks",
   "scripts",
@@ -35,7 +37,7 @@ const MANAGED_PATHS = [
   "tsconfig.json",
   "tscircuit.config.json",
 ];
-const MANAGED_NIX_FILES = ["flake.nix", "shell.nix", "treefmt.nix", ".envrc"];
+const MANAGED_NIX_FILES = ["flake.nix", "flake.lock", "shell.nix", "treefmt.nix", ".envrc"];
 
 function slugify(input) {
   const slug = input
@@ -51,7 +53,8 @@ function hasCommand(cmd) {
 }
 
 function makeWritable(targetPath) {
-  const stat = statSync(targetPath);
+  const stat = lstatSync(targetPath);
+  if (stat.isSymbolicLink()) return;
 
   if (stat.isFile()) {
     chmodSync(targetPath, stat.mode | 0o200);
@@ -61,13 +64,7 @@ function makeWritable(targetPath) {
   chmodSync(targetPath, stat.mode | 0o700);
 
   for (const entry of readdirSync(targetPath, { withFileTypes: true })) {
-    const fullPath = resolve(targetPath, entry.name);
-
-    if (entry.isDirectory()) {
-      makeWritable(fullPath);
-    } else if (entry.isFile()) {
-      chmodSync(fullPath, statSync(fullPath).mode | 0o200);
-    }
+    makeWritable(resolve(targetPath, entry.name));
   }
 }
 
@@ -112,7 +109,9 @@ function copyTemplate(targetDir, { useNix }) {
 function patchProjectMetadata(targetDir, projectName) {
   const readmePath = resolve(targetDir, "README.md");
   if (existsSync(readmePath)) {
-    const updated = readFileSync(readmePath, "utf8").replaceAll("__PROJECT_NAME__", projectName);
+    const updated = readFileSync(readmePath, "utf8")
+      .replaceAll("{{PROJECT_NAME}}", projectName)
+      .replaceAll("__PROJECT_NAME__", projectName);
     writeFileSync(readmePath, updated);
   }
 
@@ -243,13 +242,19 @@ const program = new Command()
     const targetDir = resolve(process.cwd(), targetArg);
     const projectName = slugify(basename(targetDir));
 
-    if (existsSync(targetDir) && readdirSync(targetDir).length > 0) {
-      console.error(`Error: target directory "${targetDir}" already exists and is not empty.`);
-      process.exit(1);
+    if (existsSync(targetDir)) {
+      if (!statSync(targetDir).isDirectory()) {
+        console.error(`Error: target path "${targetDir}" exists and is not a directory.`);
+        process.exit(1);
+      }
+      if (readdirSync(targetDir).length > 0) {
+        console.error(`Error: target directory "${targetDir}" already exists and is not empty.`);
+        process.exit(1);
+      }
     }
 
     const useGit = opts.git !== false;
-    const nixAvailable = hasCommand("nix");
+    const nixAvailable = useNix && hasCommand("nix");
     const shouldInstall = opts.install !== false;
 
     copyTemplate(targetDir, { useNix });

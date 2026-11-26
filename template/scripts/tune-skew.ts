@@ -1,7 +1,17 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { resolve } from "node:path";
-import { type CircuitIndex, indexCircuit } from "../checks/circuit-index";
-import { loadSpec } from "../checks/index";
+import {
+  type CircuitIndex,
+  getKeepoutBox,
+  getPortNetName,
+  indexCircuit,
+  keepoutMatchesLayer,
+  portSelector,
+  readJson,
+  segmentIntersectsBox,
+  writeJson,
+} from "../checks/circuit-index";
+import { loadOrCompileCircuit, loadSpec } from "../checks/index";
 import type { BoardSpec } from "../specs/board-spec.schema";
 import type { PcbTracePath, RoutePoint } from "./import-ses";
 
@@ -108,12 +118,8 @@ function buildSelectorToNet(idx: CircuitIndex | null): Map<string, string> {
   for (const port of idx.sourcePorts) {
     const comp = idx.compById.get(port.source_component_id);
     if (!comp?.name || !port?.name) continue;
-    for (const [netName, net] of idx.netByName.entries()) {
-      if (idx.connMap.areIdsConnected(port.source_port_id, net.source_net_id)) {
-        map.set(`.${comp.name} > port.${port.name}`, netName);
-        break;
-      }
-    }
+    const netName = getPortNetName(idx, port.source_port_id);
+    if (netName) map.set(portSelector(comp.name, port.name), netName);
   }
 
   return map;
@@ -148,13 +154,8 @@ function segmentClear(
   }
 
   for (const zone of spec.keepoutZones) {
-    const layers = new Set<string>(zone.layers);
-    if (!layers.has("all") && !layers.has(layer)) continue;
-    const hw = zone.widthMm / 2 + halfW + clearance;
-    const hh = zone.heightMm / 2 + halfW + clearance;
-    for (const pt of [a, b]) {
-      if (Math.abs(pt.x - zone.xMm) < hw && Math.abs(pt.y - zone.yMm) < hh) return false;
-    }
+    if (!keepoutMatchesLayer(zone, layer)) continue;
+    if (segmentIntersectsBox(a, b, getKeepoutBox(zone), halfW + clearance)) return false;
   }
 
   for (const h of holes) {
@@ -207,10 +208,12 @@ function tryInsertTrombone(
   const nx = -uy;
   const ny = ux;
 
-  const maxBumpH = Math.min(neededMm / 2, 1.5);
-  const ramp = Math.min(0.3, bestLen * 0.15);
+  // For a true 45-degree trapezoid (ramp = |h|), added length = 2 * (sqrt(2) - 1) * |h|.
+  const maxAllowedH = Math.min(1.5, (bestLen - 0.5) / 2);
+  const bumpH = Math.min(neededMm / (2 * (Math.SQRT2 - 1)), maxAllowedH);
+  const ramp = bumpH;
   const flat = Math.min(0.6, bestLen - 2 * ramp - 0.4);
-  if (flat <= 0.1 || maxBumpH <= 0.05) return false;
+  if (flat <= 0.1 || bumpH <= 0.05) return false;
 
   const mid = bestLen / 2;
   const s0 = mid - flat / 2 - ramp;
@@ -219,7 +222,7 @@ function tryInsertTrombone(
   const s3 = mid + flat / 2 + ramp;
 
   for (const dir of [1, -1]) {
-    const h = maxBumpH * dir;
+    const h = bumpH * dir;
     const pts: RoutePoint[] = [
       {
         route_type: "wire",
@@ -260,6 +263,17 @@ function tryInsertTrombone(
 
     if (clear) {
       route.splice(bestIdx, 0, ...pts);
+      for (let k = 0; k < poly.length - 1; k++) {
+        otherSegs.push({
+          x1: poly[k].x,
+          y1: poly[k].y,
+          x2: poly[k + 1].x,
+          y2: poly[k + 1].y,
+          layer,
+          halfW: width / 2,
+          net,
+        });
+      }
       return true;
     }
   }
@@ -273,10 +287,10 @@ if (!existsSync(routesPath)) {
 }
 
 const spec = loadSpec("specs/board.spec.json");
-const routes = JSON.parse(readFileSync(routesPath, "utf8")) as PcbTracePath[];
+const routes = readJson<PcbTracePath[]>(routesPath);
 const idx = existsSync(circuitJsonPath)
-  ? indexCircuit(JSON.parse(readFileSync(circuitJsonPath, "utf8")) as any[])
-  : null;
+  ? indexCircuit(readJson<any[]>(circuitJsonPath))
+  : indexCircuit(await loadOrCompileCircuit(spec.entrypoint));
 
 for (const entry of routes) {
   entry.route = mergeCollinearWires(entry.route);
@@ -341,5 +355,9 @@ for (const [netA, netB] of spec.signalIntegrity.differentialPairs) {
   }
 }
 
-writeFileSync(routesPath, `${JSON.stringify(routes, null, 2)}\n`);
-console.log(`[TUNE-SKEW] Tuned ${tunedCount} differential pair(s) -> ${routesPath}`);
+if (tunedCount > 0) {
+  writeJson(routesPath, routes);
+  console.log(`[TUNE-SKEW] Tuned ${tunedCount} differential pair(s) -> ${routesPath}`);
+} else {
+  console.log("[TUNE-SKEW] All differential pairs within skew budget (no changes written).");
+}
