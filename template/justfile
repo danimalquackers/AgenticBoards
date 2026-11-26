@@ -1,10 +1,13 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
 export PATH := justfile_directory() / "node_modules/.bin:" + env_var("PATH")
+export NODE_OPTIONS := env_var_or_default("NODE_OPTIONS", "--max-old-space-size=2048")
+export JAVA_TOOL_OPTIONS := env_var_or_default("JAVA_TOOL_OPTIONS", "-Djava.awt.headless=true -Xmx2g")
 
 entry := "src/boards/main.circuit.tsx"
 exports_dir := justfile_directory() / "dist/exports"
 routing_dir := justfile_directory() / "dist/routing"
+oom := if os() == "linux" { `command -v choom >/dev/null 2>&1 && echo "choom -n 500 --" || true` } else { "" }
 
 # Show available PCB commands grouped by stage
 default:
@@ -24,23 +27,23 @@ doctor:
       fi; \
     done
 
-# Search LCSC/JLCPCB parts concurrently (e.g. `just parts-search "ESP32-C3" "TYPE-C 24P" "USBLC6"`)
+# Search LCSC/JLCPCB parts (e.g. `just parts-search "ESP32-C3" "TYPE-C 24P" "USBLC6"`)
 [group('setup')]
 [positional-arguments]
 parts-search +queries:
-    tsx scripts/search-parts.ts "$@"
+    {{ oom }} tsx scripts/search-parts.ts "$@"
 
 # Audit specs/board.spec.json BOM entries (MPN, LCSC C-numbers, live part availability)
 [group('setup')]
 parts-verify:
-    tsx scripts/search-parts.ts --check-bom
+    {{ oom }} tsx scripts/search-parts.ts --check-bom
 
 # --- Development & Formatting ---
 
 # Start live tscircuit Schematic / PCB / 3D UI (http://localhost:3020)
 [group('dev')]
 dev port="3020":
-    tscircuit-cli dev --port {{ port }} {{ entry }}
+    {{ oom }} tscircuit-cli dev --port {{ port }} {{ entry }}
 
 # Format and auto-fix all supported files (treefmt covers TS/TSX/JS/JSON/MD/Nix/Shell/justfile)
 [group('dev')]
@@ -57,12 +60,12 @@ lint:
 # Fast placement, courtyard, keepout, Z-height, BOM & schematic check (skips autorouting)
 [group('check')]
 check-placement:
-    tsx checks/index.ts --placement
+    {{ oom }} tsx checks/index.ts --placement
 
 # Run full board checks & print grouped scorecard (writes dist/circuit.json & dist/checks-report.json)
 [group('check')]
 check:
-    tsx checks/index.ts
+    {{ oom }} tsx checks/index.ts
 
 # Print grouped summary from existing dist/checks-report.json without recompiling
 [group('check')]
@@ -78,20 +81,20 @@ check-status:
 [group('check')]
 check-preview:
     mkdir -p "{{ justfile_directory() / 'dist/preview' }}"
-    tscircuit-cli export -f schematic-svg -o "{{ justfile_directory() / 'dist/preview/schematic.svg' }}" "{{ entry }}"
-    tscircuit-cli export -f pcb-svg -o "{{ justfile_directory() / 'dist/preview/pcb.svg' }}" "{{ entry }}"
+    {{ oom }} tscircuit-cli export -f schematic-svg -o "{{ justfile_directory() / 'dist/preview/schematic.svg' }}" "{{ entry }}"
+    {{ oom }} tscircuit-cli export -f pcb-svg -o "{{ justfile_directory() / 'dist/preview/pcb.svg' }}" "{{ entry }}"
 
 # Independent KiCad CLI DRC cross-check (syncs fabRules/netClasses, refills zones, saves filled board & zip)
 [group('check')]
 check-kicad: export-kicad
-    kicad-cli pcb drc --refill-zones --save-board --format json --output "{{ exports_dir }}/kicad-drc.json" "{{ exports_dir }}/board.kicad_pcb"
+    {{ oom }} kicad-cli pcb drc --refill-zones --save-board --format json --output "{{ exports_dir }}/kicad-drc.json" "{{ exports_dir }}/board.kicad_pcb"
     zip -q -j "{{ exports_dir }}/kicad-project.zip" "{{ exports_dir }}/board.kicad_pcb" "{{ exports_dir }}/board.kicad_sch" "{{ exports_dir }}/board.kicad_pro"
     tsx scripts/check-kicad-drc.ts "{{ exports_dir }}/kicad-drc.json"
 
 # Run framework unit tests, TDD constraints, DRC, electrical/SI/PI/thermal & cached SPICE suites
 [group('check')]
 test:
-    node --import tsx --test checks/*.test.ts tests/*.test.ts
+    {{ oom }} node --import tsx --test --test-concurrency=1 checks/*.test.ts tests/*.test.ts
 
 # Full verification pass: TypeScript + formatting/lint + TDD tests
 [group('check')]
@@ -106,13 +109,13 @@ verify:
 # External headless Freerouting (injects fabRules/keepouts/rail widths, 45-deg snap) -> src/routing/board-routes.json
 [group('route')]
 route passes="40": export-dsn
-    tsx scripts/freeroute.ts "{{ exports_dir }}/board.dsn" "{{ routing_dir }}/board.ses" "{{ passes }}"
-    tsx scripts/import-ses.ts "{{ routing_dir }}/board.ses" "src/routing/board-routes.json" "dist/circuit.json"
+    {{ oom }} tsx scripts/freeroute.ts "{{ exports_dir }}/board.dsn" "{{ routing_dir }}/board.ses" "{{ passes }}"
+    {{ oom }} tsx scripts/import-ses.ts "{{ routing_dir }}/board.ses" "src/routing/board-routes.json" "dist/circuit.json"
 
 # Length-match differential pairs in src/routing/board-routes.json per specs/board.spec.json
 [group('route')]
 route-tune:
-    tsx scripts/tune-skew.ts "src/routing/board-routes.json" "dist/circuit.json"
+    {{ oom }} tsx scripts/tune-skew.ts "src/routing/board-routes.json" "dist/circuit.json"
 
 # --- Release Exports ---
 
@@ -121,8 +124,8 @@ route-tune:
 export-kicad:
     mkdir -p "{{ exports_dir }}"
 
-    tscircuit-cli export -f kicad_pcb -o "{{ exports_dir }}/board.kicad_pcb" "{{ entry }}"
-    tscircuit-cli export -f kicad_sch -o "{{ exports_dir }}/board.kicad_sch" "{{ entry }}"
+    {{ oom }} tscircuit-cli export -f kicad_pcb -o "{{ exports_dir }}/board.kicad_pcb" "{{ entry }}"
+    {{ oom }} tscircuit-cli export -f kicad_sch -o "{{ exports_dir }}/board.kicad_sch" "{{ entry }}"
     tsx scripts/sync-kicad-project.ts "{{ exports_dir }}/board.kicad_pro"
 
 # Export fabrication Gerbers + Excellon drill archive from the zone-filled KiCad PCB
@@ -131,51 +134,51 @@ export-gerbers: check-kicad
     rm -rf "{{ exports_dir }}/gerbers"
     mkdir -p "{{ exports_dir }}/gerbers"
 
-    kicad-cli pcb export gerbers --check-zones --subtract-soldermask -o "{{ exports_dir }}/gerbers" "{{ exports_dir }}/board.kicad_pcb"
-    kicad-cli pcb export drill --format excellon --excellon-units mm --excellon-separate-th -o "{{ exports_dir }}/gerbers" "{{ exports_dir }}/board.kicad_pcb"
+    {{ oom }} kicad-cli pcb export gerbers --check-zones --subtract-soldermask -o "{{ exports_dir }}/gerbers" "{{ exports_dir }}/board.kicad_pcb"
+    {{ oom }} kicad-cli pcb export drill --format excellon --excellon-units mm --excellon-separate-th -o "{{ exports_dir }}/gerbers" "{{ exports_dir }}/board.kicad_pcb"
     rm -f "{{ exports_dir }}/gerbers.zip"
     zip -q -j "{{ exports_dir }}/gerbers.zip" "{{ exports_dir }}"/gerbers/*
 
 # Export JLCPCB-compatible BOM CSV & Pick-and-Place CPL CSV
 [group('export')]
 export-pcba:
-    tsx scripts/export-pcba.ts
+    {{ oom }} tsx scripts/export-pcba.ts
 
 # Export Schematic, PCB, and Assembly SVG renders
 [group('export')]
 export-renders:
     mkdir -p "{{ exports_dir }}"
 
-    tscircuit-cli export -f schematic-svg -o "{{ exports_dir }}/schematic.svg" "{{ entry }}"
-    tscircuit-cli export -f pcb-svg -o "{{ exports_dir }}/pcb.svg" "{{ entry }}"
-    tscircuit-cli export -f assembly-svg -o "{{ exports_dir }}/assembly.svg" "{{ entry }}"
+    {{ oom }} tscircuit-cli export -f schematic-svg -o "{{ exports_dir }}/schematic.svg" "{{ entry }}"
+    {{ oom }} tscircuit-cli export -f pcb-svg -o "{{ exports_dir }}/pcb.svg" "{{ entry }}"
+    {{ oom }} tscircuit-cli export -f assembly-svg -o "{{ exports_dir }}/assembly.svg" "{{ entry }}"
 
 # Export 3D CAD models (STEP + glTF) for mechanical enclosure checks
 [group('export')]
 export-3d:
     mkdir -p "{{ exports_dir }}"
 
-    tscircuit-cli export -f step -o "{{ exports_dir }}/board.step" "{{ entry }}"
-    tscircuit-cli export -f gltf -o "{{ exports_dir }}/board.gltf" "{{ entry }}"
+    {{ oom }} tscircuit-cli export -f step -o "{{ exports_dir }}/board.step" "{{ entry }}"
+    {{ oom }} tscircuit-cli export -f gltf -o "{{ exports_dir }}/board.gltf" "{{ entry }}"
 
 # Export Specctra DSN (for external autorouters like Freerouting)
 [group('export')]
 export-dsn:
     mkdir -p "{{ exports_dir }}"
 
-    tscircuit-cli export -f specctra-dsn -o "{{ exports_dir }}/board.dsn" "{{ entry }}"
+    {{ oom }} tscircuit-cli export -f specctra-dsn -o "{{ exports_dir }}/board.dsn" "{{ entry }}"
 
 # Export human-readable netlist
 [group('export')]
 export-netlist:
     mkdir -p "{{ exports_dir }}"
 
-    tscircuit-cli export -f readable-netlist -o "{{ exports_dir }}/netlist.txt" "{{ entry }}"
+    {{ oom }} tscircuit-cli export -f readable-netlist -o "{{ exports_dir }}/netlist.txt" "{{ entry }}"
 
 # Export bench bring-up & electrical test guide (dist/exports/bringup-test-guide.md)
 [group('export')]
 export-docs:
-    tsx scripts/export-test-guide.ts
+    {{ oom }} tsx scripts/export-test-guide.ts
 
 # Full release pipeline: verify -> KiCad DRC -> zone-filled Gerbers -> PCBA -> renders -> 3D -> docs
 [group('export')]

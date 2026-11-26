@@ -295,6 +295,15 @@ if (patched.length > 0) {
   console.log(`[FREEROUTING] Added ${layers.length}L DSN via padstack(s): ${patched.join(", ")}`);
 }
 
+const existingJavaOpts = process.env.JAVA_TOOL_OPTIONS ?? "";
+const javaToolOptions = [
+  existingJavaOpts,
+  existingJavaOpts.includes("-Djava.awt.headless") ? "" : "-Djava.awt.headless=true",
+  existingJavaOpts.includes("-Xmx") ? "" : "-Xmx2g",
+]
+  .filter(Boolean)
+  .join(" ");
+
 const proc = spawnSync(
   "freerouting",
   [
@@ -310,7 +319,7 @@ const proc = spawnSync(
     timeout: 180_000,
     env: {
       ...process.env,
-      JAVA_TOOL_OPTIONS: `${process.env.JAVA_TOOL_OPTIONS ?? ""} -Djava.awt.headless=true`.trim(),
+      JAVA_TOOL_OPTIONS: javaToolOptions,
     },
   },
 );

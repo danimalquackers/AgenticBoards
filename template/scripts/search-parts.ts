@@ -3,7 +3,7 @@ import { promisify } from "node:util";
 import { loadSpec } from "../checks/index";
 
 const execFileAsync = promisify(execFile);
-const MAX_CONCURRENCY = 4;
+const MAX_CONCURRENCY = Math.max(1, Number(process.env.PARTS_SEARCH_CONCURRENCY) || 1);
 const MAX_LINES_PER_QUERY = 12;
 
 interface SearchResult {
@@ -12,11 +12,55 @@ interface SearchResult {
   ok: boolean;
 }
 
-async function searchPart(query: string): Promise<SearchResult> {
+interface JlcComponent {
+  lcsc: number;
+  mfr?: string;
+  package?: string;
+  description?: string;
+  is_basic?: boolean;
+  stock?: number | null;
+  price?: number | null;
+}
+
+async function searchLcscDirect(code: string): Promise<SearchResult | null> {
   try {
+    const res = await fetch(
+      `https://jlcsearch.tscircuit.com/api/search?q=${encodeURIComponent(code)}&limit=5`,
+      { signal: AbortSignal.timeout(15_000) },
+    );
+    if (!res.ok) return null;
+    const data = (await res.json()) as { components?: JlcComponent[] };
+    const comps = data.components ?? [];
+    if (comps.length === 0) return { query: code, output: "(no matches)", ok: true };
+
+    const lines = comps.slice(0, MAX_LINES_PER_QUERY).map((c) => {
+      const tier = c.is_basic ? "Basic" : "Extended";
+      const stock = typeof c.stock === "number" ? `${c.stock} in stock` : "stock unknown";
+      const price = typeof c.price === "number" ? `$${c.price}` : "price n/a";
+      return `C${c.lcsc} | ${c.mfr ?? "?"} | ${c.package ?? "?"} | ${tier} | ${price} | ${stock} | ${c.description ?? ""}`.trim();
+    });
+    return { query: code, output: lines.join("\n"), ok: true };
+  } catch {
+    return null;
+  }
+}
+
+async function searchPart(query: string): Promise<SearchResult> {
+  if (/^C\d+$/i.test(query.trim())) {
+    const direct = await searchLcscDirect(query.trim().toUpperCase());
+    if (direct) return direct;
+  }
+
+  try {
+    const existingNodeOpts = process.env.NODE_OPTIONS ?? "";
+    const nodeOptions = existingNodeOpts.includes("--max-old-space-size")
+      ? existingNodeOpts
+      : `${existingNodeOpts} --max-old-space-size=1024`.trim();
+
     const { stdout, stderr } = await execFileAsync("tscircuit-cli", ["search", query], {
       timeout: 30_000,
       maxBuffer: 1024 * 1024,
+      env: { ...process.env, NODE_OPTIONS: nodeOptions },
     });
 
     const lines = (stdout || stderr)

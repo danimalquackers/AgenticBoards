@@ -34,6 +34,7 @@ pkgs.mkShell {
       zip
       unzip
     ])
+    ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux (with pkgs; [ util-linux ])
     ++ extraPackages;
 
   shellHook = ''
