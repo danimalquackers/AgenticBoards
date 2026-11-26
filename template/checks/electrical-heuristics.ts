@@ -432,6 +432,144 @@ function checkSchematicLayout(idx: CircuitIndex): CheckFinding[] {
   return findings;
 }
 
+function checkBuses(idx: CircuitIndex, spec: BoardSpec): CheckFinding[] {
+  const buses = spec.signalIntegrity.buses ?? [];
+  if (buses.length === 0) return [];
+
+  const findings: CheckFinding[] = [];
+  const resistors = idx.sourceComponents.filter((c) => c.ftype === "simple_resistor");
+  const railNetIds = new Set(
+    spec.powerRails
+      .map((r) => idx.netByName.get(r.net)?.source_net_id)
+      .filter((id): id is string => Boolean(id)),
+  );
+
+  for (const bus of buses) {
+    const resolvedNets = bus.nets.map((name) => ({
+      name,
+      net: idx.netByName.get(name),
+    }));
+
+    for (const { name, net } of resolvedNets) {
+      if (!net) {
+        findings.push(
+          error(
+            "electrical",
+            "electrical.bus.net_missing",
+            `Bus "${bus.name}" (${bus.protocol}) references missing net "${name}".`,
+          ),
+        );
+      }
+    }
+
+    const needsPullUps = bus.requirePullUps ?? bus.protocol === "i2c";
+    if (needsPullUps) {
+      const targetRailId = bus.pullUpRail
+        ? idx.netByName.get(bus.pullUpRail)?.source_net_id
+        : undefined;
+
+      for (const { name, net } of resolvedNets) {
+        if (!net) continue;
+        const hasPullUp = resistors.some((res) => {
+          const ports = idx.portsByCompId.get(res.source_component_id) ?? [];
+          const onBusNet = ports.some((p) =>
+            idx.connMap.areIdsConnected(p.source_port_id, net.source_net_id),
+          );
+          if (!onBusNet) return false;
+          if (targetRailId) {
+            return ports.some((p) => idx.connMap.areIdsConnected(p.source_port_id, targetRailId));
+          }
+          return ports.some((p) =>
+            [...railNetIds].some((railId) => idx.connMap.areIdsConnected(p.source_port_id, railId)),
+          );
+        });
+
+        if (!hasPullUp) {
+          const railLabel = bus.pullUpRail ?? "a power rail";
+          findings.push(
+            error(
+              "electrical",
+              "electrical.bus.missing_pullup",
+              `Bus "${bus.name}" (${bus.protocol}) net "${name}" has no pull-up resistor to ${railLabel}.`,
+            ),
+          );
+        }
+      }
+    }
+
+    if (bus.requireTermination && resolvedNets.length >= 2) {
+      const first = resolvedNets[0].net;
+      const second = resolvedNets[1].net;
+      if (first && second) {
+        const hasTerm = resistors.some((res) => {
+          const ports = idx.portsByCompId.get(res.source_component_id) ?? [];
+          const onFirst = ports.some((p) =>
+            idx.connMap.areIdsConnected(p.source_port_id, first.source_net_id),
+          );
+          const onSecond = ports.some((p) =>
+            idx.connMap.areIdsConnected(p.source_port_id, second.source_net_id),
+          );
+          return onFirst && onSecond;
+        });
+
+        if (!hasTerm) {
+          findings.push(
+            error(
+              "signal-integrity",
+              "si.bus.missing_termination",
+              `Bus "${bus.name}" (${bus.protocol}) requires termination between "${resolvedNets[0].name}" and "${resolvedNets[1].name}", but no bridging resistor was found.`,
+            ),
+          );
+        }
+      }
+    }
+  }
+
+  return findings;
+}
+
+function checkNetClassWidths(idx: CircuitIndex, spec: BoardSpec): CheckFinding[] {
+  const netClasses = spec.netClasses ?? [];
+  if (netClasses.length === 0) return [];
+
+  const findings: CheckFinding[] = [];
+  for (const nc of netClasses) {
+    if (!nc.trackWidthMm) continue;
+    for (const netName of nc.nets) {
+      const net = idx.netByName.get(netName);
+      if (!net) continue;
+
+      for (const pt of idx.pcbTraces) {
+        const st = idx.sourceTraceById.get(pt.source_trace_id);
+        const traceConnId = pt.source_trace_id || pt.pcb_trace_id;
+        const onNet =
+          Boolean(st?.connected_source_net_ids?.includes(net.source_net_id)) ||
+          idx.connMap.areIdsConnected(traceConnId, net.source_net_id);
+        if (!onNet) continue;
+
+        let flagged = false;
+        for (const seg of routeSegments(pt)) {
+          const width = seg.widthMm ?? pt.trace_thickness;
+          if (typeof width === "number" && width + 0.01 < nc.trackWidthMm) {
+            findings.push(
+              error(
+                "signal-integrity",
+                "si.netclass.trace_too_narrow",
+                `Net "${netName}" (class "${nc.name}") has trace width ${width.toFixed(3)}mm < required ${nc.trackWidthMm.toFixed(3)}mm.`,
+              ),
+            );
+            flagged = true;
+            break;
+          }
+        }
+        if (flagged) break;
+      }
+    }
+  }
+
+  return findings;
+}
+
 /** Runs electrical, power-integrity, thermal (IPC-2221), and signal-integrity heuristics. */
 export function runElectricalHeuristics(idx: CircuitIndex, spec: BoardSpec): CheckFinding[] {
   const capacitors = idx.sourceComponents.filter((c) => c.ftype === "simple_capacitor");
@@ -443,6 +581,8 @@ export function runElectricalHeuristics(idx: CircuitIndex, spec: BoardSpec): Che
     ...checkTraceAmpacity(idx, spec),
     ...checkFloatingPins(idx, spec),
     ...checkSignalIntegrity(idx, spec),
+    ...checkBuses(idx, spec),
+    ...checkNetClassWidths(idx, spec),
     ...checkSilkscreen(idx),
     ...checkTestPointCoverage(idx, spec),
     ...checkSchematicLayout(idx),

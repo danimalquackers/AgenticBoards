@@ -9,9 +9,20 @@ description: >-
 
 # Independent Hardware Design Verifier (`pcb-review`)
 
-Run this skill inside a **fresh, read-only verifier subagent** before declaring any board
-complete. The verifier acts as a **fresh set of eyes**: detail-oriented, skeptical, and
-**report-only** (it never edits files or attempts fixes).
+Run this skill inside a **fresh, read-only verifier subagent** at **two gates**:
+
+1. **Stage 1 — Pre-Routing Architecture, BOM & Mechanical Gate (Fast, ~3–5 min)**:
+   Run right after `specs/board.spec.json`, parts selection, and initial placement pass
+   `just check-placement` and `just check-preview` — **before** investing time in routing.
+   Audits real LCSC/MPN SKUs, datasheet pin counts/voltages, enclosure Z-height stackup
+   (`maxTopHeightMm` / `maxBottomHeightMm`), connector orientation/mechanicals in
+   `dist/preview/pcb.svg` & `schematic.svg`, and protocol architecture.
+2. **Stage 2 — Final Fab Sign-Off Gate (Full Audit)**:
+   Run after `just export-all` passes. Audits the routed board (`just check-status`),
+   KiCad DRC, BOM/PnP, visual clarity (`schematic.svg`, `pcb.svg`), and `bringup-test-guide.md`.
+
+In both stages, the verifier acts as a **fresh set of eyes**: detail-oriented, skeptical,
+and **report-only** (it never edits files or attempts fixes).
 
 ## How to Launch the Verifier Subagent
 
@@ -50,7 +61,7 @@ datasheets that this board must satisfy:
 - Check every original user requirement against the compiled board and `src/`. Flag
   anything silently dropped, downgraded without approval, or only checked analytically
   rather than physically implemented.
-- Verify `just verify` and `just kicad-drc` pass with **zero** suppressed checks
+- Verify `just verify` and `just check-kicad` pass with **zero** suppressed checks
   (`--ignore-*-drc`, `drcChecksDisabled`, weakened `fabRules`, or skipped tests).
 - Flag any leftover manual post-export KiCad steps — exports must be fab-ready as generated.
 

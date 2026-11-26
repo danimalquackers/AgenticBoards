@@ -33,8 +33,30 @@ export const PowerRailSchema = z.object({
   maxVoltageV: z.number().optional(),
   maxCurrentA: z.number().nonnegative(),
   minTraceWidthMm: z.number().positive().optional(),
+  minClearanceMm: z.number().positive().optional(),
   requiresDecoupling: z.boolean().default(true),
   notes: z.string().optional(),
+});
+
+export const NetClassSchema = z.object({
+  name: z.string().min(1),
+  nets: z.array(z.string().min(1)).min(1),
+  trackWidthMm: z.number().positive().optional(),
+  clearanceMm: z.number().positive().optional(),
+  viaDiameterMm: z.number().positive().optional(),
+  viaDrillMm: z.number().positive().optional(),
+  targetImpedanceOhm: z.number().positive().optional(),
+  diffPairGapMm: z.number().positive().optional(),
+  notes: z.string().optional(),
+});
+
+export const BusSpecSchema = z.object({
+  name: z.string().min(1),
+  protocol: z.enum(["i2c", "can", "rs485", "uart", "spi", "usb2"]),
+  nets: z.array(z.string().min(1)).min(1),
+  pullUpRail: z.string().min(1).optional(),
+  requirePullUps: z.boolean().optional(),
+  requireTermination: z.boolean().optional(),
 });
 
 export const BomEntrySchema = z.object({
@@ -42,6 +64,7 @@ export const BomEntrySchema = z.object({
   lcsc: z.string().optional(),
   supplier: z.string().optional(),
   unitCostUsd: z.number().nonnegative(),
+  heightMm: z.number().positive().optional(),
   notes: z.string().optional(),
 });
 
@@ -75,6 +98,8 @@ export const BoardSpecSchema = z.object({
     exactHeightMm: z.number().positive().optional(),
     toleranceMm: z.number().nonnegative().default(0.2),
     thicknessMm: z.number().positive().default(1.6),
+    maxTopHeightMm: z.number().positive().optional(),
+    maxBottomHeightMm: z.number().positive().optional(),
     layers: z
       .number()
       .int()
@@ -82,10 +107,12 @@ export const BoardSpecSchema = z.object({
         message: "layers must be 1 or an even integer >= 2",
       }),
     copperWeightOz: z.number().positive().default(1),
+    stackup: z.string().optional(),
   }),
 
   mountingHoles: z.array(MountingHoleSchema).default([]),
   keepoutZones: z.array(KeepoutZoneSchema).default([]),
+  netClasses: z.array(NetClassSchema).default([]),
 
   fabRules: z
     .object({
@@ -141,12 +168,14 @@ export const BoardSpecSchema = z.object({
       differentialPairs: z.array(z.tuple([z.string(), z.string()])).default([]),
       maxDiffPairSkewMm: z.number().positive().default(0.5),
       maxTraceLengthMm: z.record(z.string(), z.number().positive()).default({}),
+      buses: z.array(BusSpecSchema).default([]),
     })
     .default({
       highSpeedNets: [],
       differentialPairs: [],
       maxDiffPairSkewMm: 0.5,
       maxTraceLengthMm: {},
+      buses: [],
     }),
 
   requiredComponents: z

@@ -4,47 +4,14 @@ entry := "src/boards/main.circuit.tsx"
 exports_dir := justfile_directory() / "dist/exports"
 routing_dir := justfile_directory() / "dist/routing"
 
-# Show available PCB commands
+# Show available PCB commands grouped by stage
 default:
     @just --list
 
-# Start live tscircuit Schematic / PCB / 3D UI (http://localhost:3020)
-dev port="3020":
-    tscircuit-cli dev --port {{ port }} {{ entry }}
-
-# Run TDD constraints, DRC, electrical/SI/PI/thermal & SPICE test suites
-test:
-    node --import tsx --test tests/*.test.ts
-
-# Run board checks & print grouped summary scorecard (writes dist/circuit.json & dist/checks-report.json)
-check:
-    tsx checks/index.ts
-
-# Print grouped summary from existing dist/checks-report.json without recompiling
-check-summary:
-    tsx checks/index.ts --summary
-
-# Search LCSC/JLCPCB parts concurrently (e.g. `just search "ESP32-C3" "TYPE-C 24P" "USBLC6"`)
-[positional-arguments]
-search +queries:
-    tsx scripts/search-parts.ts "$@"
-
-# Format and auto-fix all supported files (treefmt covers TS/TSX/JS/JSON/MD/Nix/Shell/justfile)
-fmt:
-    @if command -v treefmt >/dev/null 2>&1; then treefmt; else biome check --write .; fi
-
-# Check formatting and lint rules across all supported files without modifying them
-lint:
-    @if command -v treefmt >/dev/null 2>&1; then treefmt --fail-on-change; else biome check .; fi
-
-# Full verification - TypeScript + formatting/lint + TDD tests
-verify:
-    tsc --noEmit
-
-    just lint
-    just test
+# --- Setup & Research ---
 
 # Verify required & optional CLI tools (helpful for non-Nix setups)
+[group('setup')]
 doctor:
     @echo "Checking AgenticBoards toolchain:"
     @for tool in node tscircuit-cli tsc tsx just treefmt biome ngspice kicad-cli freerouting; do \
@@ -55,7 +22,126 @@ doctor:
       fi; \
     done
 
+# Search LCSC/JLCPCB parts concurrently (e.g. `just parts-search "ESP32-C3" "TYPE-C 24P" "USBLC6"`)
+[group('setup')]
+[positional-arguments]
+parts-search +queries:
+    tsx scripts/search-parts.ts "$@"
+
+# Audit specs/board.spec.json BOM entries (MPN, LCSC C-numbers, live part availability)
+[group('setup')]
+parts-verify:
+    tsx scripts/search-parts.ts --check-bom
+
+# --- Development & Formatting ---
+
+# Start live tscircuit Schematic / PCB / 3D UI (http://localhost:3020)
+[group('dev')]
+dev port="3020":
+    tscircuit-cli dev --port {{ port }} {{ entry }}
+
+# Format and auto-fix all supported files (treefmt covers TS/TSX/JS/JSON/MD/Nix/Shell/justfile)
+[group('dev')]
+fmt:
+    @if command -v treefmt >/dev/null 2>&1; then treefmt; else biome check --write .; fi
+
+# Check formatting and lint rules across all supported files without modifying them
+[group('dev')]
+lint:
+    @if command -v treefmt >/dev/null 2>&1; then treefmt --fail-on-change; else biome check .; fi
+
+# --- Checks & Verification ---
+
+# Fast placement, courtyard, keepout, Z-height, BOM & schematic check (skips autorouting)
+[group('check')]
+check-placement:
+    tsx checks/index.ts --placement
+
+# Run full board checks & print grouped scorecard (writes dist/circuit.json & dist/checks-report.json)
+[group('check')]
+check:
+    tsx checks/index.ts
+
+# Print grouped summary from existing dist/checks-report.json without recompiling
+[group('check')]
+check-summary:
+    tsx checks/index.ts --summary
+
+# Print compact machine-readable JSON snapshot (board checks, BOM, KiCad DRC) without recompiling
+[group('check')]
+check-status:
+    tsx checks/index.ts --summary --json
+
+# Render fast visual preview SVGs (dist/preview/schematic.svg & pcb.svg) for visual inspection
+[group('check')]
+check-preview:
+    mkdir -p "{{ justfile_directory() / 'dist/preview' }}"
+    tscircuit-cli export -f schematic-svg -o "{{ justfile_directory() / 'dist/preview/schematic.svg' }}" "{{ entry }}"
+    tscircuit-cli export -f pcb-svg -o "{{ justfile_directory() / 'dist/preview/pcb.svg' }}" "{{ entry }}"
+
+# Independent KiCad CLI DRC cross-check (syncs fabRules, refills zones, saves filled board)
+[group('check')]
+check-kicad: export-kicad
+    kicad-cli pcb drc --refill-zones --save-board --format json --output "{{ exports_dir }}/kicad-drc.json" "{{ exports_dir }}/board.kicad_pcb"
+
+    tsx scripts/check-kicad-drc.ts "{{ exports_dir }}/kicad-drc.json"
+
+# Run TDD constraints, DRC, electrical/SI/PI/thermal & cached SPICE test suites
+[group('check')]
+test:
+    node --import tsx --test tests/*.test.ts
+
+# Full verification gate: TypeScript + formatting/lint + TDD tests
+[group('check')]
+verify:
+    tsc --noEmit
+
+    just lint
+    just test
+
+# --- Routing ---
+
+# External headless Freerouting (injects fabRules/keepouts/rail widths, 45-deg snap) -> src/routing/board-routes.json
+[group('route')]
+route passes="40": export-dsn
+    tsx scripts/freeroute.ts "{{ exports_dir }}/board.dsn" "{{ routing_dir }}/board.ses" "{{ passes }}"
+    tsx scripts/import-ses.ts "{{ routing_dir }}/board.ses" "src/routing/board-routes.json" "dist/circuit.json"
+
+# Length-match differential pairs in src/routing/board-routes.json per specs/board.spec.json
+[group('route')]
+route-tune:
+    tsx scripts/tune-skew.ts "src/routing/board-routes.json" "dist/circuit.json"
+
+# --- Release Exports ---
+
+# Export KiCad PCB, schematic, fab-aligned .kicad_pro design rules, and project archive
+[group('export')]
+export-kicad:
+    mkdir -p "{{ exports_dir }}"
+
+    tscircuit-cli export -f kicad_pcb -o "{{ exports_dir }}/board.kicad_pcb" "{{ entry }}"
+    tscircuit-cli export -f kicad_sch -o "{{ exports_dir }}/board.kicad_sch" "{{ entry }}"
+    tsx scripts/sync-kicad-project.ts "{{ exports_dir }}/board.kicad_pro"
+    zip -q -j "{{ exports_dir }}/kicad-project.zip" "{{ exports_dir }}/board.kicad_pcb" "{{ exports_dir }}/board.kicad_sch" "{{ exports_dir }}/board.kicad_pro"
+
+# Export fabrication Gerbers + Excellon drill archive from the zone-filled KiCad PCB
+[group('export')]
+export-gerbers: check-kicad
+    rm -rf "{{ exports_dir }}/gerbers"
+    mkdir -p "{{ exports_dir }}/gerbers"
+
+    kicad-cli pcb export gerbers --check-zones --subtract-soldermask -o "{{ exports_dir }}/gerbers" "{{ exports_dir }}/board.kicad_pcb"
+    kicad-cli pcb export drill --format excellon --excellon-units mm --excellon-separate-th -o "{{ exports_dir }}/gerbers" "{{ exports_dir }}/board.kicad_pcb"
+    rm -f "{{ exports_dir }}/gerbers.zip"
+    zip -q -j "{{ exports_dir }}/gerbers.zip" "{{ exports_dir }}"/gerbers/*
+
+# Export JLCPCB-compatible BOM CSV & Pick-and-Place CPL CSV
+[group('export')]
+export-pcba:
+    tsx scripts/export-pcba.ts
+
 # Export Schematic, PCB, and Assembly SVG renders
+[group('export')]
 export-renders:
     mkdir -p "{{ exports_dir }}"
 
@@ -63,26 +149,8 @@ export-renders:
     tscircuit-cli export -f pcb-svg -o "{{ exports_dir }}/pcb.svg" "{{ entry }}"
     tscircuit-cli export -f assembly-svg -o "{{ exports_dir }}/assembly.svg" "{{ entry }}"
 
-# Export fabrication Gerbers + Excellon drill archive
-export-gerbers:
-    mkdir -p "{{ exports_dir }}"
-
-    tscircuit-cli export -f gerbers -o "{{ exports_dir }}/gerbers.zip" "{{ entry }}"
-
-# Export JLCPCB-compatible BOM CSV & Pick-and-Place CPL CSV
-export-pcba:
-    tsx scripts/export-pcba.ts
-
-# Export KiCad project archive, PCB, schematic, and fab-aligned .kicad_pro design rules
-export-kicad:
-    mkdir -p "{{ exports_dir }}"
-
-    tscircuit-cli export -f kicad_zip -o "{{ exports_dir }}/kicad-project.zip" "{{ entry }}"
-    tscircuit-cli export -f kicad_pcb -o "{{ exports_dir }}/board.kicad_pcb" "{{ entry }}"
-    tscircuit-cli export -f kicad_sch -o "{{ exports_dir }}/board.kicad_sch" "{{ entry }}"
-    tsx scripts/sync-kicad-project.ts "{{ exports_dir }}/board.kicad_pro"
-
 # Export 3D CAD models (STEP + glTF) for mechanical enclosure checks
+[group('export')]
 export-3d:
     mkdir -p "{{ exports_dir }}"
 
@@ -90,36 +158,25 @@ export-3d:
     tscircuit-cli export -f gltf -o "{{ exports_dir }}/board.gltf" "{{ entry }}"
 
 # Export Specctra DSN (for external autorouters like Freerouting)
+[group('export')]
 export-dsn:
     mkdir -p "{{ exports_dir }}"
 
     tscircuit-cli export -f specctra-dsn -o "{{ exports_dir }}/board.dsn" "{{ entry }}"
 
 # Export human-readable netlist
+[group('export')]
 export-netlist:
     mkdir -p "{{ exports_dir }}"
 
     tscircuit-cli export -f readable-netlist -o "{{ exports_dir }}/netlist.txt" "{{ entry }}"
 
-# Export bench bring-up & voltage/signal verification guide (dist/exports/bringup-test-guide.md)
-export-test-guide:
+# Export bench bring-up & electrical test guide (dist/exports/bringup-test-guide.md)
+[group('export')]
+export-docs:
     tsx scripts/export-test-guide.ts
 
-# Independent KiCad CLI DRC cross-check on exported board.kicad_pcb (refills zones, applies fabRules, fails on errors/unconnected nets)
-kicad-drc: export-kicad
-    kicad-cli pcb drc --refill-zones --save-board --format json --output "{{ exports_dir }}/kicad-drc.json" "{{ exports_dir }}/board.kicad_pcb"
-
-    tsx scripts/check-kicad-drc.ts "{{ exports_dir }}/kicad-drc.json"
-
-# External autorouting via Specctra DSN -> Freerouting -> SES -> src/routing/board-routes.json
-route passes="40": export-dsn
-    tsx scripts/freeroute.ts "{{ exports_dir }}/board.dsn" "{{ routing_dir }}/board.ses" "{{ passes }}"
-    tsx scripts/import-ses.ts "{{ routing_dir }}/board.ses" "src/routing/board-routes.json" "dist/circuit.json"
-
-# Length-match differential pairs in src/routing/board-routes.json per specs/board.spec.json
-tune-skew:
-    tsx scripts/tune-skew.ts "src/routing/board-routes.json" "dist/circuit.json"
-
-# Full manufacturing & PCBA release bundle + bring-up guide + independent KiCad CLI DRC gate
-export-all: verify export-renders export-gerbers export-pcba export-3d export-dsn export-netlist export-test-guide kicad-drc
+# Full release pipeline: verify -> KiCad DRC -> zone-filled Gerbers -> PCBA -> renders -> 3D -> docs
+[group('export')]
+export-all: verify export-gerbers export-pcba export-renders export-3d export-dsn export-netlist export-docs
     @echo "All manufacturing exports, bring-up test guide, and KiCad DRC checks passed -> dist/exports/"

@@ -1,18 +1,28 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { indexCircuit } from "../checks/circuit-index";
+import { type CircuitIndex, indexCircuit } from "../checks/circuit-index";
 import { loadSpec } from "../checks/index";
 import type { BoardSpec } from "../specs/board-spec.schema";
 import type { PcbTracePath, RoutePoint } from "./import-ses";
 
 /**
  * Spec-driven differential-pair length matcher for `src/routing/board-routes.json`.
- * Inserts collision-checked 45-degree trombone meanders on the shorter leg of any
- * pair in `specs/board.spec.json -> signalIntegrity.differentialPairs` exceeding
- * `maxDiffPairSkewMm`.
+ * Merges collinear micro-segments, resolves nets via `dist/circuit.json` connectivity,
+ * and inserts collision-checked 45-degree trombone meanders on the shorter leg of
+ * any pair exceeding `maxDiffPairSkewMm`.
  */
 const routesPath = resolve(process.cwd(), process.argv[2] ?? "src/routing/board-routes.json");
 const circuitJsonPath = resolve(process.cwd(), process.argv[3] ?? "dist/circuit.json");
+
+interface WireSegment {
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+  layer: string;
+  halfW: number;
+  net: string;
+}
 
 function routeLengthMm(route: RoutePoint[]): number {
   let len = 0;
@@ -26,46 +36,155 @@ function routeLengthMm(route: RoutePoint[]): number {
   return len;
 }
 
-function pointBlocked(
-  x: number,
-  y: number,
+function mergeCollinearWires(route: RoutePoint[]): RoutePoint[] {
+  if (route.length <= 2) return route;
+  const out: RoutePoint[] = [route[0]];
+
+  for (let i = 1; i < route.length - 1; i++) {
+    const prev = out[out.length - 1];
+    const curr = route[i];
+    const next = route[i + 1];
+
+    if (
+      prev.route_type === "wire" &&
+      curr.route_type === "wire" &&
+      next.route_type === "wire" &&
+      prev.layer === curr.layer &&
+      curr.layer === next.layer &&
+      prev.width === curr.width &&
+      curr.width === next.width
+    ) {
+      const dx1 = curr.x - prev.x;
+      const dy1 = curr.y - prev.y;
+      const dx2 = next.x - curr.x;
+      const dy2 = next.y - curr.y;
+      const l1 = Math.hypot(dx1, dy1);
+      const l2 = Math.hypot(dx2, dy2);
+      if (l1 > 1e-5 && l2 > 1e-5) {
+        const cross = Math.abs(dx1 * dy2 - dy1 * dx2) / (l1 * l2);
+        const dot = (dx1 * dx2 + dy1 * dy2) / (l1 * l2);
+        if (cross < 1e-3 && dot > 0.999) continue;
+      }
+    }
+
+    out.push(curr);
+  }
+
+  out.push(route[route.length - 1]);
+  return out;
+}
+
+function segToPointDist(px: number, py: number, x1: number, y1: number, x2: number, y2: number) {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq < 1e-10) return Math.hypot(px - x1, py - y1);
+  const t = Math.max(0, Math.min(1, ((px - x1) * dx + (py - y1) * dy) / lenSq));
+  return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy));
+}
+
+function segToSegDist(
+  ax1: number,
+  ay1: number,
+  ax2: number,
+  ay2: number,
+  bx1: number,
+  by1: number,
+  bx2: number,
+  by2: number,
+): number {
+  return Math.min(
+    segToPointDist(ax1, ay1, bx1, by1, bx2, by2),
+    segToPointDist(ax2, ay2, bx1, by1, bx2, by2),
+    segToPointDist(bx1, by1, ax1, ay1, ax2, ay2),
+    segToPointDist(bx2, by2, ax1, ay1, ax2, ay2),
+  );
+}
+
+function buildSelectorToNet(idx: CircuitIndex | null): Map<string, string> {
+  const map = new Map<string, string>();
+  if (!idx) return map;
+
+  for (const port of idx.sourcePorts) {
+    const comp = idx.compById.get(port.source_component_id);
+    if (!comp?.name || !port?.name) continue;
+    for (const [netName, net] of idx.netByName.entries()) {
+      if (idx.connMap.areIdsConnected(port.source_port_id, net.source_net_id)) {
+        map.set(`.${comp.name} > port.${port.name}`, netName);
+        break;
+      }
+    }
+  }
+
+  return map;
+}
+
+function resolveRouteNet(entry: PcbTracePath, selectorToNet: Map<string, string>): string {
+  const direct = selectorToNet.get(entry.connection);
+  if (direct) return direct;
+  const netMatch = entry.connection.match(/^net\.([^#]+)/);
+  return netMatch ? netMatch[1] : entry.connection;
+}
+
+function segmentClear(
+  a: RoutePoint,
+  b: RoutePoint,
   layer: string,
-  clearance: number,
+  halfW: number,
+  net: string,
   spec: BoardSpec,
   holes: Array<{ x: number; y: number; r: number }>,
+  otherSegs: WireSegment[],
 ): boolean {
-  const halfW = (spec.dimensions.exactWidthMm ?? spec.dimensions.maxWidthMm) / 2;
-  const halfH = (spec.dimensions.exactHeightMm ?? spec.dimensions.maxHeightMm) / 2;
-  const edge = spec.fabRules.minEdgeClearanceMm + clearance;
+  const clearance = spec.fabRules.minClearanceMm;
+  const halfBoardW = (spec.dimensions.exactWidthMm ?? spec.dimensions.maxWidthMm) / 2;
+  const halfBoardH = (spec.dimensions.exactHeightMm ?? spec.dimensions.maxHeightMm) / 2;
+  const edgeLimit = spec.fabRules.minEdgeClearanceMm + halfW;
 
-  if (Math.abs(x) > halfW - edge || Math.abs(y) > halfH - edge) return true;
+  for (const pt of [a, b]) {
+    if (Math.abs(pt.x) > halfBoardW - edgeLimit || Math.abs(pt.y) > halfBoardH - edgeLimit) {
+      return false;
+    }
+  }
 
   for (const zone of spec.keepoutZones) {
     const layers = new Set<string>(zone.layers);
     if (!layers.has("all") && !layers.has(layer)) continue;
-    const hw = zone.widthMm / 2 + clearance;
-    const hh = zone.heightMm / 2 + clearance;
-    if (Math.abs(x - zone.xMm) < hw && Math.abs(y - zone.yMm) < hh) return true;
+    const hw = zone.widthMm / 2 + halfW + clearance;
+    const hh = zone.heightMm / 2 + halfW + clearance;
+    for (const pt of [a, b]) {
+      if (Math.abs(pt.x - zone.xMm) < hw && Math.abs(pt.y - zone.yMm) < hh) return false;
+    }
   }
 
   for (const h of holes) {
-    if (Math.hypot(x - h.x, y - h.y) < h.r + clearance) return true;
+    if (segToPointDist(h.x, h.y, a.x, a.y, b.x, b.y) < h.r + halfW + clearance) return false;
   }
 
-  return false;
+  for (const seg of otherSegs) {
+    if (seg.layer !== layer || seg.net === net) continue;
+    if (
+      segToSegDist(a.x, a.y, b.x, b.y, seg.x1, seg.y1, seg.x2, seg.y2) <
+      seg.halfW + halfW + clearance
+    ) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 function tryInsertTrombone(
   route: RoutePoint[],
+  net: string,
   neededMm: number,
   spec: BoardSpec,
   holes: Array<{ x: number; y: number; r: number }>,
+  otherSegs: WireSegment[],
 ): boolean {
-  const clearance = spec.fabRules.minClearanceMm + spec.fabRules.minTraceWidthMm;
-
-  // Find the longest straight horizontal or vertical wire segment.
   let bestIdx = -1;
   let bestLen = 0;
+
   for (let i = 1; i < route.length; i++) {
     const a = route[i - 1];
     const b = route[i];
@@ -88,7 +207,6 @@ function tryInsertTrombone(
   const nx = -uy;
   const ny = ux;
 
-  // Each 45-degree bump of height `h` adds `2 * h * (1 - 1/sqrt(2))` -> use flat-top trombone adding `2*h`.
   const maxBumpH = Math.min(neededMm / 2, 1.5);
   const ramp = Math.min(0.3, bestLen * 0.15);
   const flat = Math.min(0.6, bestLen - 2 * ramp - 0.4);
@@ -133,7 +251,14 @@ function tryInsertTrombone(
       },
     ];
 
-    if (pts.every((p) => !pointBlocked(p.x, p.y, layer, clearance, spec, holes))) {
+    const poly = [a, ...pts, b];
+    const clear = poly
+      .slice(0, -1)
+      .every((p, idx) =>
+        segmentClear(p, poly[idx + 1], layer, width / 2, net, spec, holes, otherSegs),
+      );
+
+    if (clear) {
       route.splice(bestIdx, 0, ...pts);
       return true;
     }
@@ -153,6 +278,11 @@ const idx = existsSync(circuitJsonPath)
   ? indexCircuit(JSON.parse(readFileSync(circuitJsonPath, "utf8")) as any[])
   : null;
 
+for (const entry of routes) {
+  entry.route = mergeCollinearWires(entry.route);
+}
+
+const selectorToNet = buildSelectorToNet(idx);
 const holes = (idx?.pcbHoles ?? [])
   .filter((h) => typeof h?.x === "number" && typeof h?.y === "number")
   .map((h) => ({
@@ -161,28 +291,43 @@ const holes = (idx?.pcbHoles ?? [])
     r: ((h.hole_diameter ?? h.diameter ?? 1) as number) / 2,
   }));
 
-const matchNet = (entry: PcbTracePath, netName: string) =>
-  entry.connection === `net.${netName}` ||
-  entry.connection.startsWith(`net.${netName}#`) ||
-  entry.connection.includes(`.${netName}`);
+const allSegs: WireSegment[] = [];
+for (const entry of routes) {
+  const net = resolveRouteNet(entry, selectorToNet);
+  for (let i = 1; i < entry.route.length; i++) {
+    const a = entry.route[i - 1];
+    const b = entry.route[i];
+    if (a.route_type === "wire" && b.route_type === "wire" && a.layer === b.layer) {
+      allSegs.push({
+        x1: a.x,
+        y1: a.y,
+        x2: b.x,
+        y2: b.y,
+        layer: a.layer ?? "top",
+        halfW: (a.width ?? spec.fabRules.minTraceWidthMm) / 2,
+        net,
+      });
+    }
+  }
+}
 
 let tunedCount = 0;
 
 for (const [netA, netB] of spec.signalIntegrity.differentialPairs) {
-  const routesA = routes.filter((r) => matchNet(r, netA));
-  const routesB = routes.filter((r) => matchNet(r, netB));
+  const routesA = routes.filter((r) => resolveRouteNet(r, selectorToNet) === netA);
+  const routesB = routes.filter((r) => resolveRouteNet(r, selectorToNet) === netB);
   if (routesA.length === 0 || routesB.length === 0) continue;
 
   const lenA = routesA.reduce((s, r) => s + routeLengthMm(r.route), 0);
   const lenB = routesB.reduce((s, r) => s + routeLengthMm(r.route), 0);
   const skew = Math.abs(lenA - lenB);
-
   if (skew <= spec.signalIntegrity.maxDiffPairSkewMm) continue;
 
+  const targetNet = lenA < lenB ? netA : netB;
   const shorter = lenA < lenB ? routesA[0] : routesB[0];
   const needed = skew - spec.signalIntegrity.maxDiffPairSkewMm * 0.5;
 
-  if (tryInsertTrombone(shorter.route, needed, spec, holes)) {
+  if (tryInsertTrombone(shorter.route, targetNet, needed, spec, holes, allSegs)) {
     tunedCount += 1;
     const newLenA = routesA.reduce((s, r) => s + routeLengthMm(r.route), 0);
     const newLenB = routesB.reduce((s, r) => s + routeLengthMm(r.route), 0);

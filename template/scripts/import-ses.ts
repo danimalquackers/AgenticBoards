@@ -17,6 +17,15 @@ interface ViaPoint {
   holeMm: number;
 }
 
+interface PortAnchor {
+  x: number;
+  y: number;
+  halfW: number;
+  halfH: number;
+  layer: string | null;
+  selector: string;
+}
+
 export interface RoutePoint {
   route_type: "wire" | "via";
   x: number;
@@ -113,58 +122,88 @@ function wireToRoutePoints(w: WireChain): RoutePoint[] {
   }));
 }
 
-/** Stitches connected wires and vias on a net into continuous multi-layer paths. */
-function stitchNetRoutes(wires: WireChain[], vias: ViaPoint[]): RoutePoint[][] {
+function reverseRoute(route: RoutePoint[]): RoutePoint[] {
+  return [...route]
+    .reverse()
+    .map((pt) =>
+      pt.route_type === "via"
+        ? { ...pt, from_layer: pt.to_layer, to_layer: pt.from_layer }
+        : { ...pt },
+    );
+}
+
+function dedupeWires(wires: WireChain[]): WireChain[] {
+  const seen = new Set<string>();
+  const unique: WireChain[] = [];
+
+  for (const w of wires) {
+    const fwd = `${w.layer}:${w.width}:${w.points.map((p) => `${p.x.toFixed(3)},${p.y.toFixed(3)}`).join(";")}`;
+    const rev = `${w.layer}:${w.width}:${[...w.points]
+      .reverse()
+      .map((p) => `${p.x.toFixed(3)},${p.y.toFixed(3)}`)
+      .join(";")}`;
+    if (seen.has(fwd) || seen.has(rev)) continue;
+    seen.add(fwd);
+    unique.push(w);
+  }
+
+  return unique;
+}
+
+/** Stitches connected wires and vias bidirectionally into continuous multi-layer paths. */
+function stitchNetRoutes(rawWires: WireChain[], vias: ViaPoint[]): RoutePoint[][] {
+  const wires = dedupeWires(rawWires);
   const used = new Set<number>();
   const stitched: RoutePoint[][] = [];
+
+  const extendTail = (route: RoutePoint[]): boolean => {
+    const tail = route[route.length - 1];
+    const tailLayer = tail.layer ?? tail.to_layer ?? "top";
+    const viaAtTail = vias.find((v) => near(v, tail));
+
+    for (let j = 0; j < wires.length; j++) {
+      if (used.has(j)) continue;
+      const w = wires[j];
+      const sameLayer = w.layer === tailLayer;
+      if (!sameLayer && !viaAtTail) continue;
+
+      let pts: Array<{ x: number; y: number }> | null = null;
+      if (near(tail, w.points[0])) pts = w.points;
+      else if (near(tail, w.points[w.points.length - 1])) pts = [...w.points].reverse();
+      if (!pts) continue;
+
+      used.add(j);
+      if (!sameLayer && viaAtTail) {
+        route.push({
+          route_type: "via",
+          x: Number(viaAtTail.x.toFixed(4)),
+          y: Number(viaAtTail.y.toFixed(4)),
+          from_layer: tailLayer,
+          to_layer: w.layer,
+          via_diameter: viaAtTail.outerMm,
+          via_hole_diameter: viaAtTail.holeMm,
+        });
+      }
+
+      const nextPoints = wireToRoutePoints({ ...w, points: pts });
+      route.push(...(sameLayer ? nextPoints.slice(1) : nextPoints));
+      return true;
+    }
+
+    return false;
+  };
 
   for (let startIdx = 0; startIdx < wires.length; startIdx++) {
     if (used.has(startIdx)) continue;
     used.add(startIdx);
 
-    const route = wireToRoutePoints(wires[startIdx]);
+    let route = wireToRoutePoints(wires[startIdx]);
+    while (extendTail(route)) {}
 
-    let extended = true;
-    while (extended) {
-      extended = false;
-      const tail = route[route.length - 1];
-      const tailLayer = tail.layer ?? tail.to_layer ?? "top";
-      const viaAtTail = vias.find((v) => near(v, tail));
-
-      for (let j = 0; j < wires.length; j++) {
-        if (used.has(j)) continue;
-        const w = wires[j];
-        const first = w.points[0];
-        const last = w.points[w.points.length - 1];
-
-        const sameLayer = w.layer === tailLayer;
-        const canBridge = sameLayer || Boolean(viaAtTail);
-        if (!canBridge) continue;
-
-        let pts: Array<{ x: number; y: number }> | null = null;
-        if (near(tail, first)) pts = w.points;
-        else if (near(tail, last)) pts = [...w.points].reverse();
-        if (!pts) continue;
-
-        used.add(j);
-        if (!sameLayer && viaAtTail) {
-          route.push({
-            route_type: "via",
-            x: Number(viaAtTail.x.toFixed(4)),
-            y: Number(viaAtTail.y.toFixed(4)),
-            from_layer: tailLayer,
-            to_layer: w.layer,
-            via_diameter: viaAtTail.outerMm,
-            via_hole_diameter: viaAtTail.holeMm,
-          });
-        }
-
-        const nextPoints = wireToRoutePoints({ ...w, points: pts });
-        route.push(...(sameLayer ? nextPoints.slice(1) : nextPoints));
-        extended = true;
-        break;
-      }
-    }
+    // Also extend backward from the original head by reversing, extending, and restoring.
+    route = reverseRoute(route);
+    while (extendTail(route)) {}
+    route = reverseRoute(route);
 
     stitched.push(route);
   }
@@ -172,54 +211,93 @@ function stitchNetRoutes(wires: WireChain[], vias: ViaPoint[]): RoutePoint[][] {
   return stitched;
 }
 
-function buildPortLookup(idx: CircuitIndex | null) {
+function buildPortAnchors(idx: CircuitIndex | null): PortAnchor[] {
   if (!idx) return [];
 
   const sourcePortById = new Map(idx.sourcePorts.map((p) => [p.source_port_id, p]));
-  const ports: Array<{ x: number; y: number; selector: string }> = [];
+  const padBoundsByPort = new Map<string, { halfW: number; halfH: number; layer: string | null }>();
 
+  for (const el of idx.raw) {
+    if (el?.type === "pcb_smtpad" && el.pcb_port_id) {
+      padBoundsByPort.set(el.pcb_port_id, {
+        halfW: (typeof el.width === "number" ? el.width : 0.4) / 2,
+        halfH: (typeof el.height === "number" ? el.height : 0.4) / 2,
+        layer: typeof el.layer === "string" ? el.layer : null,
+      });
+    } else if (el?.type === "pcb_plated_hole" && el.pcb_port_id) {
+      const r =
+        Math.max(
+          typeof el.outer_diameter === "number" ? el.outer_diameter : 0.8,
+          typeof el.outer_width === "number" ? el.outer_width : 0.8,
+          typeof el.outer_height === "number" ? el.outer_height : 0.8,
+        ) / 2;
+      padBoundsByPort.set(el.pcb_port_id, { halfW: r, halfH: r, layer: null });
+    }
+  }
+
+  const anchors: PortAnchor[] = [];
   for (const pp of idx.pcbPorts) {
     if (typeof pp?.x !== "number" || typeof pp?.y !== "number") continue;
     const sp = sourcePortById.get(pp.source_port_id);
     const comp = sp ? idx.compById.get(sp.source_component_id) : undefined;
     if (!comp?.name || !sp?.name) continue;
-    ports.push({ x: pp.x, y: pp.y, selector: `.${comp.name} > port.${sp.name}` });
+
+    const bounds = padBoundsByPort.get(pp.pcb_port_id) ?? { halfW: 0.35, halfH: 0.35, layer: null };
+    anchors.push({
+      x: pp.x,
+      y: pp.y,
+      halfW: Math.max(bounds.halfW, 0.35),
+      halfH: Math.max(bounds.halfH, 0.35),
+      layer: bounds.layer,
+      selector: `.${comp.name} > port.${sp.name}`,
+    });
   }
 
-  return ports;
+  return anchors;
 }
 
-function pickUniqueConnection(
-  netName: string,
+function findMatchingPort(pt: RoutePoint, anchors: PortAnchor[]): PortAnchor | null {
+  let best: { anchor: PortAnchor; dist: number } | null = null;
+  const ptLayer = pt.layer ?? pt.from_layer ?? null;
+
+  for (const anchor of anchors) {
+    if (anchor.layer && ptLayer && anchor.layer !== ptLayer) continue;
+    const dx = Math.abs(pt.x - anchor.x);
+    const dy = Math.abs(pt.y - anchor.y);
+    if (dx > anchor.halfW + 0.15 || dy > anchor.halfH + 0.15) continue;
+
+    const dist = Math.hypot(dx, dy);
+    if (!best || dist < best.dist) best = { anchor, dist };
+  }
+
+  return best?.anchor ?? null;
+}
+
+function snapRouteEndpoints(
   route: RoutePoint[],
-  ports: Array<{ x: number; y: number; selector: string }>,
-  used: Set<string>,
-): string {
-  const endpoints = [route[0], route[route.length - 1]].filter(Boolean);
+  anchors: PortAnchor[],
+): {
+  startPort: PortAnchor | null;
+  endPort: PortAnchor | null;
+} {
+  const startPort = route[0] ? findMatchingPort(route[0], anchors) : null;
+  const endPort = route[route.length - 1]
+    ? findMatchingPort(route[route.length - 1], anchors)
+    : null;
 
-  for (const ep of endpoints) {
-    let best: { selector: string; dist: number } | null = null;
-    for (const p of ports) {
-      const dist = Math.hypot(p.x - ep.x, p.y - ep.y);
-      if (dist <= 0.35 && (!best || dist < best.dist)) {
-        best = { selector: p.selector, dist };
-      }
-    }
-    if (best && !used.has(best.selector)) {
-      used.add(best.selector);
-      return best.selector;
-    }
+  if (startPort && !near(route[0], startPort, 0.005)) {
+    route.unshift({
+      ...route[0],
+      x: Number(startPort.x.toFixed(4)),
+      y: Number(startPort.y.toFixed(4)),
+    });
+  }
+  if (endPort && !near(route[route.length - 1], endPort, 0.005)) {
+    const tail = route[route.length - 1];
+    route.push({ ...tail, x: Number(endPort.x.toFixed(4)), y: Number(endPort.y.toFixed(4)) });
   }
 
-  const cleanNet = netName.replace(/_source_net_\d+$/, "");
-  let idx = 0;
-  let fallback = `net.${cleanNet}`;
-  while (used.has(fallback)) {
-    idx += 1;
-    fallback = `net.${cleanNet}#${idx}`;
-  }
-  used.add(fallback);
-  return fallback;
+  return { startPort, endPort };
 }
 
 const sesPath = resolve(process.cwd(), process.argv[2] ?? "dist/routing/board.ses");
@@ -245,13 +323,14 @@ const scale = toMmScale(routesNode);
 const idx = existsSync(circuitJsonPath)
   ? indexCircuit(JSON.parse(readFileSync(circuitJsonPath, "utf8")) as any[])
   : null;
-const ports = buildPortLookup(idx);
+const anchors = buildPortAnchors(idx);
 const usedConnections = new Set<string>();
-const tracePaths: PcbTracePath[] = [];
+const trunks: PcbTracePath[] = [];
+const branches: PcbTracePath[] = [];
 
 for (const item of networkOut.slice(1)) {
   if (!Array.isArray(item) || item[0] !== "net" || typeof item[1] !== "string") continue;
-  const netName = item[1];
+  const netName = item[1].replace(/_source_net_\d+$/, "");
   const vias: ViaPoint[] = [];
   const wires: WireChain[] = [];
 
@@ -280,12 +359,37 @@ for (const item of networkOut.slice(1)) {
     }
   }
 
-  for (const route of stitchNetRoutes(wires, vias)) {
-    const connection = pickUniqueConnection(netName, route, ports, usedConnections);
-    tracePaths.push({ connection, route });
+  for (let route of stitchNetRoutes(wires, vias)) {
+    let { startPort, endPort } = snapRouteEndpoints(route, anchors);
+    if (!startPort && endPort) {
+      route = reverseRoute(route);
+      [startPort, endPort] = [endPort, startPort];
+    }
+
+    const candidates = [startPort?.selector, endPort?.selector].filter((s): s is string =>
+      Boolean(s),
+    );
+    let connection = candidates.find((s) => !usedConnections.has(s));
+
+    if (!connection) {
+      let n = 0;
+      connection = `net.${netName}`;
+      while (usedConnections.has(connection)) {
+        n += 1;
+        connection = `net.${netName}#${n}`;
+      }
+    }
+
+    usedConnections.add(connection);
+    const entry: PcbTracePath = { connection, route };
+    if (startPort && endPort) trunks.push(entry);
+    else branches.push(entry);
   }
 }
 
+const tracePaths = [...trunks, ...branches];
 mkdirSync(dirname(outPath), { recursive: true });
 writeFileSync(outPath, `${JSON.stringify(tracePaths, null, 2)}\n`);
-console.log(`[IMPORT-SES] Imported ${tracePaths.length} stitched paths -> ${outPath}`);
+console.log(
+  `[IMPORT-SES] Imported ${tracePaths.length} stitched paths (${trunks.length} port-to-port, ${branches.length} branches) -> ${outPath}`,
+);

@@ -64,7 +64,10 @@ export function loadSpec(specPath = "specs/board.spec.json"): BoardSpec {
 
 const DEFAULT_COMPILE_TIMEOUT_MS = 180_000;
 
-export async function compileBoard(entrypoint: string): Promise<any[]> {
+export async function compileBoard(
+  entrypoint: string,
+  options: { routingDisabled?: boolean } = {},
+): Promise<any[]> {
   const modPath = resolve(process.cwd(), entrypoint);
   const mod = await import(`${pathToFileURL(modPath).href}?t=${Date.now()}`);
   const Component = mod.default ?? mod.MainBoard;
@@ -75,7 +78,15 @@ export async function compileBoard(entrypoint: string): Promise<any[]> {
 
   const timeoutMs = Number(process.env.AUTOROUTE_TIMEOUT_MS ?? DEFAULT_COMPILE_TIMEOUT_MS);
   const circuit = new Circuit();
-  circuit.add(React.createElement(Component));
+  const rootEl = Component();
+  const element =
+    options.routingDisabled && React.isValidElement(rootEl)
+      ? React.cloneElement(rootEl as React.ReactElement<Record<string, unknown>>, {
+          routingDisabled: true,
+        })
+      : React.createElement(Component);
+
+  circuit.add(element);
 
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
@@ -128,16 +139,38 @@ export async function loadOrCompileCircuit(entrypoint: string): Promise<any[]> {
   return compileBoard(entrypoint);
 }
 
-export async function runAllBoardChecks(specPath = "specs/board.spec.json"): Promise<CheckReport> {
+const ROUTING_ONLY_IDS = new Set([
+  "drc.native.pcb_port_not_connected_error",
+  "drc.native.pcb_trace_missing_error",
+  "drc.checkEachPcbPortConnectedToPcbTrace",
+  "thermal.ampacity.trace_too_narrow",
+  "si.diff_pair.skew",
+  "si.trace_length.exceeded",
+  "si.netclass.trace_too_narrow",
+]);
+
+export async function runAllBoardChecks(
+  specPath = "specs/board.spec.json",
+  options: { placementOnly?: boolean } = {},
+): Promise<CheckReport> {
+  const placementOnly = Boolean(options.placementOnly);
   const spec = loadSpec(specPath);
-  const circuitJson = await compileBoard(spec.entrypoint);
+  const circuitJson = await compileBoard(spec.entrypoint, { routingDisabled: placementOnly });
   const idx = indexCircuit(circuitJson);
 
   const drcFindings = runDrcChecks(idx, spec);
-  const { findings: constraintFindings, bom, boardMetrics } = runConstraintChecks(idx, spec);
+  const {
+    findings: constraintFindings,
+    bom,
+    boardMetrics,
+  } = runConstraintChecks(idx, spec, { placementOnly });
   const elecFindings = runElectricalHeuristics(idx, spec);
 
-  const findings = [...drcFindings, ...constraintFindings, ...elecFindings];
+  const rawFindings = [...drcFindings, ...constraintFindings, ...elecFindings];
+  const findings = placementOnly
+    ? rawFindings.filter((f) => !ROUTING_ONLY_IDS.has(f.id))
+    : rawFindings;
+
   const errorCount = findings.filter((f) => f.severity === "error").length;
   const warningCount = findings.filter((f) => f.severity === "warning").length;
 
@@ -154,8 +187,10 @@ export async function runAllBoardChecks(specPath = "specs/board.spec.json"): Pro
     findings,
   };
 
-  writeJson(resolve(process.cwd(), "dist/circuit.json"), circuitJson);
-  writeJson(resolve(process.cwd(), "dist/checks-report.json"), report);
+  if (!placementOnly) {
+    writeJson(resolve(process.cwd(), "dist/circuit.json"), circuitJson);
+    writeJson(resolve(process.cwd(), "dist/checks-report.json"), report);
+  }
 
   return report;
 }
@@ -181,7 +216,40 @@ function printReport(report: CheckReport): void {
   }
 }
 
+function readKicadDrcSnapshot(): {
+  present: boolean;
+  passed: boolean;
+  errorCount: number;
+  unconnectedCount: number;
+  warningCount: number;
+} | null {
+  const drcPath = resolve(process.cwd(), "dist/exports/kicad-drc.json");
+  if (!existsSync(drcPath)) return null;
+
+  try {
+    const raw = JSON.parse(readFileSync(drcPath, "utf8")) as {
+      violations?: Array<{ severity?: string }>;
+      unconnected_items?: unknown[];
+    };
+    const violations = raw.violations ?? [];
+    const errorCount = violations.filter((v) => v.severity === "error").length;
+    const warningCount = violations.filter((v) => v.severity === "warning").length;
+    const unconnectedCount = (raw.unconnected_items ?? []).length;
+    return {
+      present: true,
+      passed: errorCount === 0 && unconnectedCount === 0,
+      errorCount,
+      unconnectedCount,
+      warningCount,
+    };
+  } catch {
+    return null;
+  }
+}
+
 async function main(): Promise<void> {
+  const jsonMode = process.argv.includes("--json");
+  const placementOnly = process.argv.includes("--placement");
   let report: CheckReport;
 
   if (process.argv.includes("--summary")) {
@@ -192,10 +260,32 @@ async function main(): Promise<void> {
     }
     report = JSON.parse(readFileSync(reportPath, "utf8")) as CheckReport;
   } else {
-    report = await runAllBoardChecks();
+    report = await runAllBoardChecks("specs/board.spec.json", { placementOnly });
   }
 
-  printReport(report);
+  if (jsonMode) {
+    const snapshot = {
+      timestamp: report.timestamp,
+      projectName: report.projectName,
+      placementOnly,
+      passed: report.passed,
+      errorCount: report.errorCount,
+      warningCount: report.warningCount,
+      boardMetrics: report.boardMetrics,
+      bom: {
+        bomCostUsd: report.bom.bomCostUsd,
+        maxBomUsd: report.bom.maxBomUsd,
+        totalUnitCostUsd: report.bom.totalUnitCostUsd,
+        unpricedCount: report.bom.unpricedDesignators.length,
+      },
+      kicadDrc: readKicadDrcSnapshot(),
+      summary: report.summary,
+    };
+    console.log(JSON.stringify(snapshot, null, 2));
+  } else {
+    printReport(report);
+  }
+
   if (!report.passed) process.exit(1);
 }
 

@@ -45,5 +45,17 @@
         "noVar": "error"
       }
     }
-  }
+  },
+  "overrides": [
+    {
+      "includes": ["imports/**"],
+      "linter": {
+        "rules": {
+          "correctness": {
+            "noUnusedImports": "off"
+          }
+        }
+      }
+    }
+  ]
 }

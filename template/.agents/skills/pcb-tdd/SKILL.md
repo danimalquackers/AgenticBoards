@@ -75,11 +75,11 @@ are written in `src/boards/main.circuit.tsx`:
 
 ## Phase 4: Incremental Placement
 
-1. **Pre-Layout BOM & Mechanical Review (Before Routing)**: Before placing traces, verify every active IC, connector, and protection part has a real, orderable LCSC/MPN SKU whose pin count, voltage rating, and physical Z-height match the datasheet and enclosure. Never invent simplified footprints for real modules or connectors.
-2. Build and wire **1 to 2 subcircuits at a time** (outline + connectors + mounting holes -> power stage -> core IC -> peripherals -> silkscreen/polish). Do not dump dozens of unverified components in one pass.
+1. **Pre-Routing BOM, Z-Height & Architecture Gate (Before Routing)**: Before placing traces, verify every active IC, connector, and protection part has a real, orderable LCSC/MPN SKU whose pin count, voltage rating, and `heightMm` fit `maxTopHeightMm`/`maxBottomHeightMm` in `specs/board.spec.json`. Run `just check-placement` (fast ~1–2s check without autorouting) and invoke a Stage 1 `pcb-review` verifier subagent on complex/enclosure-constrained boards before routing.
+2. Build and wire **1 to 2 subcircuits at a time** (outline + connectors + mounting holes -> power stage -> core IC -> peripherals -> silkscreen/polish). Iterate on placement and schematic layout with `just check-placement` until zero courtyard/keepout/Z-height/BOM errors remain, then run `just check`.
 3. Put each functional block in `src/subcircuits/<Block>.tsx` inside a `<group>` and compose them in `src/boards/main.circuit.tsx` with `autorouter="auto-local"` and `pcbStyle` / `RoutingTolerances` matching `specs/board.spec.json -> fabRules`.
-4. Run `just check` (or `just test`) after each subcircuit and resolve all placement/courtyard overlaps before adding the next block. Use `just check-summary` to inspect the grouped error summary without reading raw `dist/checks-report.json`.
-5. **Avoid micro-nudging loops & custom scratch routers**: If `auto-local` still fails DRC after 3 to 5 targeted placement adjustments, stop nudging coordinates by 0.2 mm and **never** write ad-hoc A\* or serpentine routing scripts in `scratch/`. Re-architect the crowded zone (uncross diff-pair ICs/connectors, move parts to the opposite layer, rotate ICs, or widen channels) or run `just route` (and `just tune-skew` if differential pairs need length matching).
+4. Run `just check` (or `just test`) after each subcircuit and use `just check-summary` to inspect grouped errors without reading raw `dist/checks-report.json`.
+5. **Avoid micro-nudging loops & custom scratch routers**: If `auto-local` still fails DRC after 3 to 5 targeted placement adjustments, stop nudging coordinates by 0.2 mm and **never** write ad-hoc A\* or serpentine routing scripts in `scratch/`. Re-architect the crowded zone (uncross diff-pair ICs/connectors, move parts to the opposite layer, rotate ICs, or widen channels) or run `just route` (and `just route-tune` if differential pairs need length matching).
 6. Run `just verify` before finishing. Never weaken tests or bypass DRC with `--ignore-*-drc` or `drcChecksDisabled`.
 
 ## Handling Feedback & Major Changes

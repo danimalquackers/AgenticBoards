@@ -12,18 +12,35 @@ description: >-
 Every completed board must be **ready to fabricate and assemble** — never omit
 the supporting components required for reliable Rev-1 hardware.
 
+## Domain Reference Packs (Load Only What Applies)
+
+Read the matching reference under `references/` **before** laying out specialized subsystems:
+
+| Subsystem / Design Class                               | Reference                              |
+| :----------------------------------------------------- | :------------------------------------- |
+| tscircuit JSX, footprints, courtyards, routing, SPICE  | `references/tscircuit-reference.md`    |
+| Buck/boost/charger, motor drivers, rails > 1 A         | `references/power-electronics.md`      |
+| USB-C/2.0/3.x, Ethernet, CAN/RS-485, SPI/SDIO > 20 MHz | `references/high-speed-interfaces.md`  |
+| BLE, Wi-Fi, LoRa, GNSS, PCB/chip antennas, 50 Ω feeds  | `references/rf-wireless.md`            |
+| Precision ADCs/DACs, op-amps, sensors, audio, VREF     | `references/analog-mixed-signal.md`    |
+| > 48 V DC, AC mains, PoE, galvanic isolation barriers  | `references/high-voltage-isolation.md` |
+
 ## 1. Real Parts, Footprints & 3D Models
 
 - Pick real, in-stock parts (prefer JLCPCB Basic Parts for passives). Derate
   capacitors >=2x working voltage (accounts for X5R/X7R DC-bias loss) and
   resistors >=2x expected power.
-- Search & import footprints/3D models into `src/components/`:
-  - Batch search multiple parts in parallel: `just search "<part1>" "<part2>" ...`
+- Search, verify, and import footprints/3D models into `src/components/`:
+  - Batch search multiple parts in parallel: `just parts-search "<part1>" "<part2>" ...`
+  - Audit all `specs/board.spec.json` BOM LCSC/MPN entries: `just parts-verify`
   - Single search / import / convert: `tsci search "<part>"` | `tsci import "<LCSC_C_NUMBER>"` | `tsci convert <file.kicad_mod>`
-- Consult `references/tscircuit-reference.md` for `<board>` DRC/via props, semantic primitives (`<connector>`, `<testpoint>`, `<hole>`), custom footprint courtyards, `pcbPath` routing, and SPICE testbench syntax before reading `node_modules`.
 - Verify every IC pinout and polarity (diode cathode, LED, polarized caps, MOSFET
-  pinout) against its datasheet. Record every placed designator's MPN, LCSC, and
-  unit price in `specs/board.spec.json -> budget.bomCosts`.
+  pinout) against its datasheet. Record every placed designator's MPN, LCSC,
+  `heightMm`, and unit price in `specs/board.spec.json -> budget.bomCosts`.
+- Declare specialized net rules in `specs/board.spec.json`: `netClasses` (per-net
+  width/clearance/impedance), `dimensions.stackup` (e.g. `"JLC04161H-7628"`), and
+  `signalIntegrity.buses` (I2C pull-ups, CAN/RS-485 termination) so Freerouting,
+  KiCad DRC, and TDD checks enforce them automatically.
 
 ## 2. Mandatory Fab-Ready Support Circuitry
 

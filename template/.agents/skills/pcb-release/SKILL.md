@@ -13,12 +13,12 @@ description: >-
 Generate only what you need via `just` (run `just` to list all recipes):
 
 - `just export-renders` — `schematic.svg`, `pcb.svg`, `assembly.svg`
-- `just export-gerbers` — `gerbers.zip` (Gerbers + Excellon drills)
+- `just export-gerbers` — `gerbers.zip` (generated from the zone-filled, KiCad-DRC-verified `board.kicad_pcb`)
 - `just export-pcba` — JLCPCB `bom.csv` + Pick-and-Place CPL `pnp.csv`
-- `just export-kicad` — `kicad-project.zip`, `board.kicad_pcb`, `board.kicad_sch`
+- `just export-kicad` — `kicad-project.zip`, `board.kicad_pcb`, `board.kicad_sch`, `board.kicad_pro`
 - `just export-3d` — `board.step`, `board.gltf`
 - `just export-dsn` / `just export-netlist` — `board.dsn`, `netlist.txt`
-- `just export-test-guide` — `bringup-test-guide.md` (power-off short checks, test-point coordinate/voltage table, power-on sequence, SI probing notes, and SPICE baseline)
+- `just export-docs` — `bringup-test-guide.md` (continuity/short checks, diode & resistance checks, test-point voltage table, SI notes, and SPICE baseline)
 
 ## 2. Optional External Autorouting & Tuning
 
@@ -27,11 +27,11 @@ differential pairs exceed `maxDiffPairSkewMm`:
 
 ```bash
 just route
-just tune-skew   # optional: length-matches differentialPairs in src/routing/board-routes.json
+just route-tune  # optional: length-matches differentialPairs in src/routing/board-routes.json
 ```
 
-`just route` injects `fabRules`, `keepoutZones`, and `powerRails` trace widths into
-`dist/exports/board.dsn`, runs headless `freerouting`, and imports stitched multi-layer
+`just route` injects `fabRules`, `keepoutZones`, `powerRails` trace widths, and 45° snap
+into `dist/exports/board.dsn`, runs headless `freerouting`, and imports stitched multi-layer
 routes into `src/routing/board-routes.json` for `<autoroutingphase pcbTracePaths={boardRoutes} />`.
 
 ## 3. Full Release Sign-Off Gate
@@ -40,10 +40,9 @@ routes into `src/routing/board-routes.json` for `<autoroutingphase pcbTracePaths
 just export-all
 ```
 
-Runs `just verify` (TypeScript, Biome, DRC, unrouted-trace, edge-clearance,
-mechanical, fab, BOM-budget, IPC-2221 ampacity, diff-pair skew, SPICE tests),
-generates all deliverables in `dist/exports/`, and executes `just kicad-drc`
-(exiting non-zero if `kicad-cli pcb drc` reports any error or unconnected net).
+Runs `just verify`, `just check-kicad` (syncing `fabRules`, refilling zones, and exiting
+non-zero on any KiCad DRC error or unconnected net), generates zone-filled Gerbers directly
+from the verified KiCad PCB, and exports all deliverables into `dist/exports/`.
 
 Inspect `dist/exports/kicad-drc.json` for any remaining warnings, optionally run
 `tsci quote` for fab pricing, and do a final visual sign-off in the live preview

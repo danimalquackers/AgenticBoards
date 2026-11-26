@@ -31,15 +31,18 @@ All developer and agent workflows run through **`just`** (`just --list`).
      watcher live-updates Schematic, PCB, and 3D views on every file write.
 
 3. **Build Incrementally**:
-   - Add and verify **1 to 2 subcircuits at a time** (`just check` / `just check-summary`) and
-     resolve placement/courtyard overlaps before wiring the next block.
+   - Add and verify **1 to 2 subcircuits at a time** (`just check-placement` for fast ~1–2s
+     placement/courtyard/keepout/Z-height checks, `just check-preview` for quick visual
+     SVGs, then `just check` / `just check-summary` / `just check-status`).
 
 4. **Fab-Ready Engineering (`pcb-engineering` skill)**:
-   - Use real, in-stock parts with verified pinouts, footprints/3D models (`just search`,
-     `tsci import`, `tsci convert`), and BOM pricing + LCSC/MPN in `specs/board.spec.json`.
-   - Consult `.agents/skills/pcb-engineering/references/tscircuit-reference.md` for `<board>`
-     via/tolerance props, semantic primitives (`<connector>`, `<testpoint>`, `<hole>`), and
-     routing patterns instead of reading `node_modules`.
+   - Use real, in-stock parts with verified pinouts, footprints/3D models (`just parts-search`,
+     `just parts-verify`, `tsci import`, `tsci convert`), and BOM pricing + LCSC/MPN +
+     `heightMm` in `specs/board.spec.json`.
+   - Load the matching domain reference pack under `.agents/skills/pcb-engineering/references/`
+     (`tscircuit-reference.md`, `power-electronics.md`, `high-speed-interfaces.md`,
+     `rf-wireless.md`, `analog-mixed-signal.md`, `high-voltage-isolation.md`) instead of
+     reading `node_modules`.
    - Include all production support circuitry: reverse-polarity/ESD protection, USB-C `5.1kΩ`
      CC1/CC2 pull-downs, bulk + per-IC `100nF` decoupling, pull-ups, crystal load caps, debug
      header, moderate `<testpoint>` pads on `GND` and primary power rails (never on high-speed
@@ -49,10 +52,10 @@ All developer and agent workflows run through **`just`** (`just --list`).
 
 5. **Per-Format Exports, Docs & Independent Verification (`pcb-release` & `pcb-review` skills)**:
    - Use targeted `just` recipes during iteration (`just export-renders`, `just export-3d`,
-     `just export-gerbers`, `just export-pcba`, `just export-kicad`, `just export-test-guide`,
-     `just route`).
-   - Run `just export-all` (which runs `just verify`, all exports, `dist/exports/bringup-test-guide.md`,
-     and `just kicad-drc`) until it passes with zero errors and zero unconnected nets.
-   - Before declaring the board complete, launch an **independent verifier subagent** using the
-     `pcb-review` skill to audit the design against original requirements, electrical/protocol
-     standards, and anti-slop checks, and visually verify the live preview at `http://localhost:3020`.
+     `just export-gerbers`, `just export-pcba`, `just export-kicad`, `just export-docs`,
+     `just route`, `just route-tune`).
+   - Run `just export-all` (which runs `just verify`, `just check-kicad`, zone-filled Gerbers,
+     and all deliverables) until it passes with zero errors and zero unconnected nets.
+   - Launch an **independent verifier subagent** (`pcb-review`) at Stage 1 (pre-routing BOM,
+     Z-height & architecture gate on complex boards) and Stage 2 (final fab sign-off), and
+     visually verify the live preview at `http://localhost:3020`.

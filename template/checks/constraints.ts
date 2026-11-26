@@ -514,19 +514,59 @@ function evaluateBom(
   };
 }
 
-/** Validates mechanical, fab, routing, component, net, 3D model, and BOM budget rules. */
-export function runConstraintChecks(idx: CircuitIndex, spec: BoardSpec): ConstraintCheckOutput {
+function checkZHeights(idx: CircuitIndex, spec: BoardSpec): CheckFinding[] {
+  const { maxTopHeightMm, maxBottomHeightMm } = spec.dimensions;
+  if (maxTopHeightMm === undefined && maxBottomHeightMm === undefined) return [];
+
+  const findings: CheckFinding[] = [];
+
+  for (const sc of idx.sourceComponents) {
+    const name = String(sc.name ?? "");
+    const heightMm = spec.budget.bomCosts[name]?.heightMm;
+    if (heightMm === undefined) continue;
+
+    const pcb = idx.pcbBySourceId.get(sc.source_component_id);
+    const layer = typeof pcb?.layer === "string" ? pcb.layer : "top";
+    const limit = layer === "bottom" ? maxBottomHeightMm : maxTopHeightMm;
+
+    if (limit !== undefined && heightMm > limit) {
+      findings.push(
+        error(
+          "mechanical",
+          "mechanical.z_height.exceeded",
+          `Component ${name} (${layer}) height ${heightMm}mm exceeds max ${layer} clearance (${limit}mm).`,
+        ),
+      );
+    }
+  }
+
+  return findings;
+}
+
+/** Validates mechanical, fab, routing, component, net, 3D model, Z-height, and BOM budget rules. */
+export function runConstraintChecks(
+  idx: CircuitIndex,
+  spec: BoardSpec,
+  options: { placementOnly?: boolean } = {},
+): ConstraintCheckOutput {
   const geom = getBoardGeometry(idx);
   const violatesEdge = createEdgeChecker(geom, spec.fabRules.minEdgeClearanceMm);
   const { bom, findings: bomFindings } = evaluateBom(idx, spec);
+
+  const routingFindings = options.placementOnly
+    ? []
+    : [
+        ...checkUnroutedTraces(idx),
+        ...checkTraceFabRules(idx, spec, violatesEdge),
+        ...checkViaFabRules(idx, spec, violatesEdge),
+      ];
 
   const findings = [
     ...checkDimensions(geom, idx, spec),
     ...checkMountingHoles(idx, spec),
     ...checkKeepoutZones(idx, spec),
-    ...checkUnroutedTraces(idx),
-    ...checkTraceFabRules(idx, spec, violatesEdge),
-    ...checkViaFabRules(idx, spec, violatesEdge),
+    ...checkZHeights(idx, spec),
+    ...routingFindings,
     ...checkRequiredEntities(idx, spec),
     ...checkFootprintsAndModels(idx, spec),
     ...bomFindings,

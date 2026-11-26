@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { loadSpec } from "../checks/index";
 
 const execFileAsync = promisify(execFile);
 const MAX_CONCURRENCY = 4;
@@ -64,14 +65,68 @@ async function mapConcurrent<T, R>(
   return results;
 }
 
+async function verifyBom(specPath = "specs/board.spec.json"): Promise<void> {
+  const spec = loadSpec(specPath);
+  const entries = Object.entries(spec.budget.bomCosts);
+  if (entries.length === 0) {
+    console.log("No entries in specs/board.spec.json -> budget.bomCosts.");
+    return;
+  }
+
+  let issues = 0;
+  const lcscToDesignators = new Map<string, string[]>();
+
+  for (const [designator, entry] of entries) {
+    if (!entry.mpn) {
+      console.warn(`[WARN] ${designator}: missing MPN`);
+      issues += 1;
+    }
+    if (!entry.lcsc) {
+      console.warn(`[WARN] ${designator}: missing LCSC part number`);
+      issues += 1;
+    } else if (/^C\d+$/i.test(entry.lcsc.trim())) {
+      const code = entry.lcsc.trim().toUpperCase();
+      const list = lcscToDesignators.get(code) ?? [];
+      list.push(designator);
+      lcscToDesignators.set(code, list);
+    }
+  }
+
+  const uniqueCodes = [...lcscToDesignators.keys()];
+  console.log(
+    `[PARTS] Auditing ${entries.length} BOM designator(s), ${uniqueCodes.length} unique LCSC part(s)...`,
+  );
+
+  if (uniqueCodes.length > 0) {
+    const results = await mapConcurrent(uniqueCodes, MAX_CONCURRENCY, searchPart);
+    for (const result of results) {
+      const refs = lcscToDesignators.get(result.query)?.join(", ") ?? "";
+      console.log(`\n### ${result.query} (${refs})`);
+      console.log(result.output);
+      if (!result.ok) issues += 1;
+    }
+  }
+
+  if (issues > 0) {
+    console.error(`\n[PARTS] BOM verification completed with ${issues} issue(s).`);
+    process.exit(1);
+  }
+  console.log("\n[PARTS] BOM verification passed.");
+}
+
 async function main(): Promise<void> {
-  const queries = process.argv.slice(2).filter((q) => q.trim().length > 0);
-  if (queries.length === 0) {
-    console.error("Usage: just search <query1> [query2 ...]");
+  const args = process.argv.slice(2).filter((q) => q.trim().length > 0);
+  if (args[0] === "--check-bom") {
+    await verifyBom(args[1] ?? "specs/board.spec.json");
+    return;
+  }
+
+  if (args.length === 0) {
+    console.error("Usage: just parts-search <query1> [query2 ...] | just parts-verify");
     process.exit(1);
   }
 
-  const results = await mapConcurrent(queries, MAX_CONCURRENCY, searchPart);
+  const results = await mapConcurrent(args, MAX_CONCURRENCY, searchPart);
   let failed = 0;
 
   for (const result of results) {

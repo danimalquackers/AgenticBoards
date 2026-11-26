@@ -103,25 +103,24 @@ flowchart TD
 All project tasks are standardized through **`just`** (`package.json` holds
 dependencies and metadata only):
 
-| Command                                   | Purpose                                                                                  |
-| :---------------------------------------- | :--------------------------------------------------------------------------------------- |
-| `just dev`                                | Start live tscircuit Schematic / PCB / 3D UI (`http://localhost:3020`)                   |
-| `just test`                               | Run TDD constraints, DRC, electrical/SI/PI/thermal & SPICE test suites                   |
-| `just check`                              | Run checks and print a full verification scorecard (`dist/checks-report.json`)           |
-| `just fmt`                                | Format & auto-fix all file types (`treefmt`, or `biome` fallback)                        |
-| `just lint`                               | Check formatting & lint rules without modifying files (`nix flake check` also runs this) |
-| `just verify`                             | Full verification gate (`tsc --noEmit` + `just lint` + `just test`)                      |
-| `just doctor`                             | Check toolchain binaries on `PATH`                                                       |
-| `just export-renders`                     | Export `schematic.svg`, `pcb.svg`, `assembly.svg`                                        |
-| `just export-gerbers`                     | Export fabrication `gerbers.zip` (Gerbers + Excellon drills)                             |
-| `just export-pcba`                        | Export JLCPCB `bom.csv` & Pick-and-Place CPL `pnp.csv`                                   |
-| `just export-kicad`                       | Export `kicad-project.zip`, `board.kicad_pcb`, `board.kicad_sch`                         |
-| `just export-3d`                          | Export 3D CAD models (`board.step`, `board.gltf`)                                        |
-| `just export-dsn` / `just export-netlist` | Export Specctra `board.dsn` / human-readable `netlist.txt`                               |
-| `just export-test-guide`                  | Export `bringup-test-guide.md` (short checks, test-point map, voltage/SI reference)      |
-| `just kicad-drc`                          | Run independent `kicad-cli pcb drc` gate on `board.kicad_pcb`                            |
-| `just route`                              | Export Specctra DSN and run headless `freerouting` → `dist/routing/board.ses`            |
-| `just export-all`                         | Run `verify`, all exports, bring-up guide, and `kicad-drc` for release sign-off          |
+| Stage    | Command                                   | Purpose                                                                                        |
+| :------- | :---------------------------------------- | :--------------------------------------------------------------------------------------------- |
+| `setup`  | `just doctor`                             | Check toolchain binaries on `PATH`                                                             |
+| `setup`  | `just parts-search <q...>`                | Search LCSC/JLCPCB parts concurrently                                                          |
+| `dev`    | `just dev`                                | Start live tscircuit Schematic / PCB / 3D UI (`http://localhost:3020`)                         |
+| `dev`    | `just fmt` / `just lint`                  | Format or lint all file types (`treefmt`, or `biome` fallback)                                 |
+| `check`  | `just check-placement`                    | Fast placement, courtyard, keepout, Z-height, BOM & schematic check (skips autorouting)        |
+| `check`  | `just check` / `just check-summary`       | Full board verification scorecard / print grouped summary from `dist/checks-report.json`       |
+| `check`  | `just check-kicad`                        | Independent `kicad-cli pcb drc` gate (syncs `fabRules`, refills zones, saves filled board)     |
+| `check`  | `just test` / `just verify`               | Run TDD constraints + cached SPICE tests (`verify` adds `tsc --noEmit` + `just lint`)          |
+| `route`  | `just route` / `just route-tune`          | Headless 45° Freerouting (`src/routing/board-routes.json`) & differential-pair length matching |
+| `export` | `just export-kicad`                       | Export `board.kicad_pcb`, `board.kicad_sch`, `board.kicad_pro`, and `kicad-project.zip`        |
+| `export` | `just export-gerbers`                     | Export `gerbers.zip` from the KiCad-DRC-verified, zone-filled `board.kicad_pcb`                |
+| `export` | `just export-pcba`                        | Export JLCPCB `bom.csv` & Pick-and-Place CPL `pnp.csv`                                         |
+| `export` | `just export-renders` / `just export-3d`  | Export SVGs (`schematic`, `pcb`, `assembly`) / 3D CAD (`board.step`, `board.gltf`)             |
+| `export` | `just export-dsn` / `just export-netlist` | Export Specctra `board.dsn` / human-readable `netlist.txt`                                     |
+| `export` | `just export-docs`                        | Export `bringup-test-guide.md` (continuity, diode, resistance, voltage & SI reference)         |
+| `export` | `just export-all`                         | Full release pipeline: `verify` → `check-kicad` → zone-filled Gerbers → all exports & docs     |
 
 ---
 

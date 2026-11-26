@@ -1,4 +1,6 @@
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type { BoardSpec } from "../specs/board-spec.schema";
 import { isDirectRun, writeJson } from "./circuit-index";
@@ -122,9 +124,38 @@ function runSingleSimulation(sim: SimulationSpec, rootDir: string): SimulationRu
   };
 }
 
+function computeSimCacheKey(spec: BoardSpec, rootDir: string): string {
+  const hash = createHash("sha256");
+  hash.update(JSON.stringify(spec.simulations));
+
+  for (const sim of spec.simulations) {
+    const simFile = resolve(rootDir, sim.file);
+    hash.update(sim.file);
+    if (existsSync(simFile)) hash.update(readFileSync(simFile));
+  }
+
+  return hash.digest("hex");
+}
+
 export function runSimulations(spec: BoardSpec, rootDir = process.cwd()): SimulationRunResult[] {
+  const reportPath = resolve(rootDir, "dist/sim-report.json");
+  const cachePath = resolve(rootDir, "dist/sim-cache.json");
+  const cacheKey = computeSimCacheKey(spec, rootDir);
+
+  if (process.env.FORCE_SIM !== "1" && existsSync(reportPath) && existsSync(cachePath)) {
+    try {
+      const cached = JSON.parse(readFileSync(cachePath, "utf8")) as { cacheKey?: string };
+      if (cached.cacheKey === cacheKey) {
+        return JSON.parse(readFileSync(reportPath, "utf8")) as SimulationRunResult[];
+      }
+    } catch {
+      // Cache unreadable; fall through to re-run simulations.
+    }
+  }
+
   const results = spec.simulations.map((sim) => runSingleSimulation(sim, rootDir));
-  writeJson(resolve(rootDir, "dist/sim-report.json"), results);
+  writeJson(reportPath, results);
+  writeJson(cachePath, { cacheKey });
   return results;
 }
 

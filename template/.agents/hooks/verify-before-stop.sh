@@ -21,6 +21,12 @@ if [ "${FULLY_IDLE}" != "true" ] || [ "${REASON}" != "NO_TOOL_CALL" ] || [ "${EX
 	exit 0
 fi
 
+# Skip nudging if another verification, export, or routing process is already active.
+if command -v pgrep >/dev/null 2>&1 && pgrep -f "checks/index\.ts|tscircuit-cli|freerouting" >/dev/null 2>&1; then
+	printf '{}'
+	exit 0
+fi
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 REPORT="${REPO_ROOT}/dist/checks-report.json"
 

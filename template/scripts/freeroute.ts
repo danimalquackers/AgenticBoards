@@ -110,8 +110,8 @@ function injectKeepouts(dsn: string, layers: string[], spec: BoardSpec | null): 
   return `${dsn.slice(0, boundaryEnd + 1)}\n${blocks.join("\n")}${dsn.slice(boundaryEnd + 1)}`;
 }
 
-function injectPowerRailClasses(dsn: string, spec: BoardSpec | null): string {
-  if (!spec || spec.powerRails.length === 0) return dsn;
+function injectNetClasses(dsn: string, spec: BoardSpec | null): string {
+  if (!spec || (spec.netClasses.length === 0 && spec.powerRails.length === 0)) return dsn;
 
   const netStart = dsn.indexOf("(network");
   if (netStart < 0) return dsn;
@@ -120,10 +120,31 @@ function injectPowerRailClasses(dsn: string, spec: BoardSpec | null): string {
 
   const networkBlock = dsn.slice(netStart, netEnd);
   const dsnNetNames = [...networkBlock.matchAll(/\(net\s+"([^"]+)"/g)].map((m) => m[1]);
-  const clearanceUm = Math.round(spec.fabRules.minClearanceMm * 1000);
   const defaultVia = dsn.match(/\bVia\[[^\s()"]+\]/)?.[0];
-
+  const assignedDsnNets = new Set<string>();
   const classes: string[] = [];
+
+  const matchDsnNets = (specNets: string[]): string[] =>
+    dsnNetNames.filter(
+      (n) =>
+        !assignedDsnNets.has(n) &&
+        specNets.some((target) => n === target || n.startsWith(`${target}_source_net_`)),
+    );
+
+  for (const nc of spec.netClasses) {
+    const matchingNets = matchDsnNets(nc.nets);
+    if (matchingNets.length === 0) continue;
+
+    for (const n of matchingNets) assignedDsnNets.add(n);
+    const widthUm = Math.round((nc.trackWidthMm ?? spec.fabRules.minTraceWidthMm) * 1000);
+    const clearanceUm = Math.round((nc.clearanceMm ?? spec.fabRules.minClearanceMm) * 1000);
+    const quoted = matchingNets.map((n) => `"${n}"`).join(" ");
+    const viaLine = defaultVia ? `      (circuit (use_via "${defaultVia}"))\n` : "";
+    classes.push(
+      `    (class "${nc.name}" ${quoted}\n${viaLine}      (rule (width ${widthUm}) (clearance ${clearanceUm}))\n    )`,
+    );
+  }
+
   for (const rail of spec.powerRails) {
     const reqWidthMm = Math.max(
       ipc2221MinTraceWidthMm(
@@ -133,14 +154,20 @@ function injectPowerRailClasses(dsn: string, spec: BoardSpec | null): string {
       ),
       rail.minTraceWidthMm ?? 0,
     );
-    if (reqWidthMm <= spec.fabRules.minTraceWidthMm + 1e-3) continue;
+    const reqClearanceMm = Math.max(spec.fabRules.minClearanceMm, rail.minClearanceMm ?? 0);
+    if (
+      reqWidthMm <= spec.fabRules.minTraceWidthMm + 1e-3 &&
+      reqClearanceMm <= spec.fabRules.minClearanceMm + 1e-3
+    ) {
+      continue;
+    }
 
-    const matchingNets = dsnNetNames.filter(
-      (n) => n === rail.net || n.startsWith(`${rail.net}_source_net_`),
-    );
+    const matchingNets = matchDsnNets([rail.net]);
     if (matchingNets.length === 0) continue;
 
-    const widthUm = Math.round(reqWidthMm * 1000);
+    for (const n of matchingNets) assignedDsnNets.add(n);
+    const widthUm = Math.round(Math.max(spec.fabRules.minTraceWidthMm, reqWidthMm) * 1000);
+    const clearanceUm = Math.round(reqClearanceMm * 1000);
     const quoted = matchingNets.map((n) => `"${n}"`).join(" ");
     const viaLine = defaultVia ? `      (circuit (use_via "${defaultVia}"))\n` : "";
     classes.push(
@@ -183,6 +210,99 @@ function repairMissingViaPadstacks(
   return { text: patchedText, patched: missing };
 }
 
+function ensureSnapAngle(dsn: string): string {
+  if (dsn.includes("(snap_angle")) return dsn;
+  const structStart = dsn.indexOf("(structure");
+  if (structStart < 0) return dsn;
+  const insertAt = dsn.indexOf("\n", structStart);
+  if (insertAt < 0) return dsn;
+  return `${dsn.slice(0, insertAt + 1)}    (snap_angle fortyfive_degree)\n${dsn.slice(insertAt + 1)}`;
+}
+
+/**
+ * Clones `:back` component/image/padstack definitions when a single DSN component
+ * image is placed on both `front` and `back`, preventing Freerouting from routing
+ * mixed-side passives (e.g., 0402 resistors) on the wrong copper layer.
+ */
+function splitMixedSideComponents(dsn: string): string {
+  const placeStart = dsn.indexOf("(placement");
+  const libStart = dsn.indexOf("(library");
+  if (placeStart < 0 || libStart < 0) return dsn;
+
+  const placeEnd = findMatchingParen(dsn, placeStart);
+  if (placeEnd < 0) return dsn;
+
+  let placement = dsn.slice(placeStart, placeEnd + 1);
+  const splitNames: string[] = [];
+
+  placement = placement.replace(
+    /\(component\s+"([^"]+)"([\s\S]*?)\n\s*\)/g,
+    (full, name: string, body: string) => {
+      const lines = body.split("\n").filter((l) => l.trim().startsWith("(place "));
+      const front = lines.filter((l) => /\sfront\s/.test(l));
+      const back = lines.filter((l) => /\sback\s/.test(l));
+      if (front.length === 0 || back.length === 0) return full;
+
+      splitNames.push(name);
+      return [
+        `(component "${name}"`,
+        ...front,
+        "    )",
+        `    (component "${name}:back"`,
+        ...back,
+        "    )",
+      ].join("\n");
+    },
+  );
+
+  if (splitNames.length === 0) return dsn;
+
+  let out = `${dsn.slice(0, placeStart)}${placement}${dsn.slice(placeEnd + 1)}`;
+  const newLibStart = out.indexOf("(library");
+  const newLibEnd = findMatchingParen(out, newLibStart);
+  if (newLibStart < 0 || newLibEnd < 0) return out;
+
+  const libBlock = out.slice(newLibStart, newLibEnd);
+  const additions: string[] = [];
+  const clonedPads = new Set<string>();
+
+  for (const name of splitNames) {
+    const imgNeedle = `(image "${name}"`;
+    const imgStart = libBlock.indexOf(imgNeedle);
+    if (imgStart < 0) continue;
+    const imgEnd = findMatchingParen(libBlock, imgStart);
+    if (imgEnd < 0) continue;
+
+    let imgBack = libBlock.slice(imgStart, imgEnd + 1).replace(imgNeedle, `(image "${name}:back"`);
+
+    for (const m of imgBack.matchAll(/\(pin\s+"([^"]+)"/g)) {
+      const padName = m[1];
+      const padStart = libBlock.indexOf(`(padstack "${padName}"`);
+      if (padStart < 0) continue;
+      const padEnd = findMatchingParen(libBlock, padStart);
+      if (padEnd < 0) continue;
+
+      const padDef = libBlock.slice(padStart, padEnd + 1);
+      if (!padDef.includes("F.Cu") || padDef.includes("B.Cu")) continue;
+
+      const backPadName = `${padName}_B`;
+      imgBack = imgBack.replaceAll(`"${padName}"`, `"${backPadName}"`);
+      if (!clonedPads.has(backPadName)) {
+        clonedPads.add(backPadName);
+        additions.push(
+          padDef.replace(`"${padName}"`, `"${backPadName}"`).replaceAll("F.Cu", "B.Cu"),
+        );
+      }
+    }
+
+    additions.push(imgBack);
+  }
+
+  if (additions.length === 0) return out;
+  out = `${out.slice(0, newLibEnd)}\n    ${additions.join("\n    ")}\n  ${out.slice(newLibEnd)}`;
+  return out;
+}
+
 if (!existsSync(dsnPath)) {
   console.error(`[FREEROUTING] DSN file not found: ${dsnPath}`);
   process.exit(1);
@@ -193,9 +313,15 @@ const spec = existsSync(specPath) ? loadSpec("specs/board.spec.json") : null;
 
 const rawDsn = readFileSync(dsnPath, "utf8");
 const layers = extractStructureLayers(rawDsn);
-const cleaned = injectPowerRailClasses(
-  injectKeepouts(syncFabRules(stripEmptyClassNets(stripWiringScope(rawDsn)), spec), layers, spec),
-  spec,
+const cleaned = splitMixedSideComponents(
+  injectNetClasses(
+    injectKeepouts(
+      ensureSnapAngle(syncFabRules(stripEmptyClassNets(stripWiringScope(rawDsn)), spec)),
+      layers,
+      spec,
+    ),
+    spec,
+  ),
 );
 const { text: fixedDsn, patched } = repairMissingViaPadstacks(cleaned, layers);
 
