@@ -24,6 +24,8 @@ export const KeepoutZoneSchema = z.object({
   widthMm: z.number().positive(),
   heightMm: z.number().positive(),
   layers: z.array(KeepoutLayerSchema).default(["all"]),
+  allowPlacements: z.boolean().default(false),
+  exemptComponents: z.array(z.string()).default([]),
 });
 
 export const PowerRailSchema = z

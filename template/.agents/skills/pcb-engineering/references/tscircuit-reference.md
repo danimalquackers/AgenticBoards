@@ -57,7 +57,7 @@ Use the matching JSX primitive to prevent `source_refdes_convention_warning` and
 ## Common `tscircuit` Pitfalls
 
 - **Never put `unbroken` on inner `<copperpour>` in dense multi-layer boards**: `<copperpour unbroken />` locks `auto-local` out of that layer and can trigger multi-hour routing thrash. Omit `unbroken`; `just check-kicad` fills the solid zone automatically via `--refill-zones`.
-- **Keepout tag & layers**: Use `<keepout>` (not `<pcbkeepout>`). Do not include `"top"` on an antenna keepout when the wireless module's own pads/courtyard sit on `top` (causes KiCad `items_not_allowed`).
+- **Keepout tag & layers**: Use `<keepout>` (not `<pcbkeepout>`). Do not pile on `"top"` `<keepout>` halos touching QFN/module pads — it causes KiCad `items_not_allowed` and can hang `auto-local` indefinitely. To block `"top"` traces under an antenna module, use `keepoutZones` with `"layers": ["all"]` and `"exemptComponents": ["U1"]` in `specs/board.spec.json` instead.
 - **`pcbPath` coordinates**: Waypoints in `pcbPath` are relative to the `from` port by default. Do not pass `pcbPathRelativeTo="board"` (crashes `@tscircuit/core`).
 - **Dual-sided connectors**: If top and bottom pads share identical `(x, y)` coordinates, `tscircuit` may silently drop one pad; offset the bottom pad by `0.02 mm`.
 - **EasyEDA imports (`tscircuit-cli import`)**: If an imported `.tsx` footprint throws `ReferenceError: React is not defined`, add `import React from "react"` at the top of that file.

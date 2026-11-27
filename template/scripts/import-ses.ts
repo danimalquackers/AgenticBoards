@@ -310,6 +310,133 @@ function snapRouteEndpoints(
   return { startPort, endPort };
 }
 
+export function getCopperPourNetNames(idx: CircuitIndex | null): Set<string> {
+  const names = new Set<string>();
+  if (!idx || idx.pcbCopperPours.length === 0) return names;
+
+  for (const [netName, net] of idx.netByName.entries()) {
+    const hasPour = idx.pcbCopperPours.some(
+      (pour) =>
+        pour.source_net_id === net.source_net_id ||
+        idx.connMap.areIdsConnected(
+          pour.source_net_id || pour.pcb_copper_pour_id,
+          net.source_net_id,
+        ),
+    );
+    if (hasPour) names.add(netName);
+  }
+
+  return names;
+}
+
+/**
+ * Nudges intermediate vias that land directly on a component pad slightly along
+ * an adjacent wire segment so `@tscircuit/core` does not reject them with
+ * `has a via at a pad; enable allowViaInPad`.
+ */
+export function nudgePadCenterVias(route: RoutePoint[], anchors: PortAnchor[]): RoutePoint[] {
+  if (anchors.length === 0 || route.length < 3) return route;
+
+  for (let i = 1; i < route.length - 1; i++) {
+    const pt = route[i];
+    if (pt.route_type !== "via") continue;
+
+    const hitPad = anchors.find(
+      (a) => Math.abs(pt.x - a.x) <= a.halfW + 0.02 && Math.abs(pt.y - a.y) <= a.halfH + 0.02,
+    );
+    if (!hitPad) continue;
+
+    const prev = route[i - 1];
+    const next = route[i + 1];
+    const candidates = [prev, next]
+      .filter((n) => n.route_type === "wire")
+      .map((n) => ({ n, dist: Math.hypot(n.x - pt.x, n.y - pt.y) }))
+      .sort((a, b) => b.dist - a.dist);
+
+    const best = candidates[0];
+    const minShift = Math.hypot(hitPad.halfW, hitPad.halfH) + 0.15;
+    if (!best || best.dist <= minShift + 0.05) continue;
+
+    const ratio = minShift / best.dist;
+    const nx = Number((pt.x + (best.n.x - pt.x) * ratio).toFixed(4));
+    const ny = Number((pt.y + (best.n.y - pt.y) * ratio).toFixed(4));
+    pt.x = nx;
+    pt.y = ny;
+
+    // Insert a short wire bridge from the pad center to the shifted via on the adjacent layer.
+    if (best.n === next && prev.route_type === "wire") {
+      route.splice(i, 0, { ...prev, x: nx, y: ny });
+      i += 1;
+    } else if (best.n === prev && next.route_type === "wire") {
+      route.splice(i + 1, 0, { ...next, x: nx, y: ny });
+      i += 1;
+    }
+  }
+
+  return route;
+}
+
+export interface NetPathCandidate {
+  netName: string;
+  entry: PcbTracePath;
+  hasBothPorts: boolean;
+}
+
+/**
+ * Topologically orders saved paths for `@tscircuit/core` `<autoroutingphase>`:
+ * - Keeps all port-to-port trunks first.
+ * - Iteratively appends port-anchored branches whose tail joins already-accepted copper
+ *   on the same net.
+ * - Drops dangling stubs and never emits invalid `net.<name>` fallback keys.
+ */
+export function orderAndFilterSavedPaths(candidates: NetPathCandidate[]): {
+  accepted: PcbTracePath[];
+  droppedCount: number;
+} {
+  const accepted: PcbTracePath[] = [];
+  const copperByNet = new Map<string, RoutePoint[]>();
+  const pending: NetPathCandidate[] = [];
+
+  const recordCopper = (netName: string, route: RoutePoint[]) => {
+    const list = copperByNet.get(netName) ?? [];
+    list.push(...route);
+    copperByNet.set(netName, list);
+  };
+
+  for (const c of candidates) {
+    if (c.entry.connection.startsWith("net.")) continue;
+    if (c.hasBothPorts) {
+      accepted.push(c.entry);
+      recordCopper(c.netName, c.entry.route);
+    } else {
+      pending.push(c);
+    }
+  }
+
+  let progress = true;
+  while (progress && pending.length > 0) {
+    progress = false;
+    for (let i = pending.length - 1; i >= 0; i--) {
+      const c = pending[i];
+      const existing = copperByNet.get(c.netName);
+      const tail = c.entry.route[c.entry.route.length - 1];
+      if (!existing || !tail) continue;
+
+      const joinsCopper = existing.some((pt) => near(pt, tail, 0.06));
+      if (joinsCopper) {
+        accepted.push(c.entry);
+        recordCopper(c.netName, c.entry.route);
+        pending.splice(i, 1);
+        progress = true;
+      }
+    }
+  }
+
+  const droppedCount =
+    candidates.filter((c) => c.entry.connection.startsWith("net.")).length + pending.length;
+  return { accepted, droppedCount };
+}
+
 async function main(): Promise<void> {
   const sesPath = resolve(process.cwd(), process.argv[2] ?? "dist/routing/board.ses");
   const outPath = resolve(process.cwd(), process.argv[3] ?? "src/routing/board-routes.json");
@@ -340,13 +467,19 @@ async function main(): Promise<void> {
   }
 
   const anchors = buildPortAnchors(idx);
+  const pourNets = getCopperPourNetNames(idx);
   const usedConnections = new Set<string>();
-  const trunks: PcbTracePath[] = [];
-  const branches: PcbTracePath[] = [];
+  const candidates: NetPathCandidate[] = [];
+  let skippedPourNets = 0;
 
   for (const item of networkOut.slice(1)) {
     if (!Array.isArray(item) || item[0] !== "net" || typeof item[1] !== "string") continue;
     const netName = item[1].replace(/_source_net_\d+$/, "");
+    if (pourNets.has(netName)) {
+      skippedPourNets += 1;
+      continue;
+    }
+
     const vias: ViaPoint[] = [];
     const wires: WireChain[] = [];
 
@@ -382,31 +515,28 @@ async function main(): Promise<void> {
         [startPort, endPort] = [endPort, startPort];
       }
 
-      const candidates = [startPort?.selector, endPort?.selector].filter((s): s is string =>
+      route = nudgePadCenterVias(route, anchors);
+
+      const portCandidates = [startPort?.selector, endPort?.selector].filter((s): s is string =>
         Boolean(s),
       );
-      let connection = candidates.find((s) => !usedConnections.has(s));
-
-      if (!connection) {
-        let n = 0;
-        connection = `net.${netName}`;
-        while (usedConnections.has(connection)) {
-          n += 1;
-          connection = `net.${netName}#${n}`;
-        }
-      }
+      const connection = portCandidates.find((s) => !usedConnections.has(s));
+      if (!connection) continue;
 
       usedConnections.add(connection);
-      const entry: PcbTracePath = { connection, route };
-      if (startPort && endPort) trunks.push(entry);
-      else branches.push(entry);
+      candidates.push({
+        netName,
+        entry: { connection, route },
+        hasBothPorts: Boolean(startPort && endPort),
+      });
     }
   }
 
-  const tracePaths = [...trunks, ...branches];
-  writeJson(outPath, tracePaths);
+  const { accepted, droppedCount } = orderAndFilterSavedPaths(candidates);
+  writeJson(outPath, accepted);
   console.log(
-    `[IMPORT-SES] Imported ${tracePaths.length} stitched paths (${trunks.length} port-to-port, ${branches.length} branches) -> ${outPath}`,
+    `[IMPORT-SES] Imported ${accepted.length} validated paths ` +
+      `(${droppedCount} unattached/stub dropped, ${skippedPourNets} copper-pour net(s) deferred) -> ${outPath}`,
   );
 }
 

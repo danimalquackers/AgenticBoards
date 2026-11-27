@@ -126,6 +126,14 @@ export function checkIcDecouplingProximity(
     const chipPcb = idx.pcbBySourceId.get(chip.source_component_id);
     if (!chipPcb?.center) continue;
 
+    // Skip passive/protection chips (e.g., ESD diode arrays) that have no power-rail connection.
+    if (
+      railNetIds.length > 0 &&
+      !railNetIds.some((railId) => componentOnNet(idx, chip.source_component_id, railId))
+    ) {
+      continue;
+    }
+
     let nearest = Number.POSITIVE_INFINITY;
     for (const cap of decouplingCaps) {
       const capPcb = idx.pcbBySourceId.get(cap.source_component_id);

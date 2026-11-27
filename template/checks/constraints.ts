@@ -155,20 +155,33 @@ export function checkKeepoutZones(idx: CircuitIndex, spec: BoardSpec): CheckFind
     const boxOverlaps = (x: number, y: number, hw: number, hh: number) =>
       x + hw > box.minX && x - hw < box.maxX && y + hh > box.minY && y - hh < box.maxY;
 
-    for (const comp of idx.pcbComponents) {
-      const compLayer = typeof comp.layer === "string" ? comp.layer : "top";
-      if (!keepoutMatchesLayer(zone, compLayer)) continue;
+    if (!zone.allowPlacements) {
+      const exempt = new Set(zone.exemptComponents ?? []);
+      for (const comp of idx.pcbComponents) {
+        const compLayer = typeof comp.layer === "string" ? comp.layer : "top";
+        if (!keepoutMatchesLayer(zone, compLayer)) continue;
 
-      const cx = comp.center?.x ?? 0;
-      const cy = comp.center?.y ?? 0;
-      if (boxOverlaps(cx, cy, (comp.width ?? 0) / 2, (comp.height ?? 0) / 2)) {
-        findings.push(
-          error(
-            "mechanical",
-            "mechanical.keepout.violation",
-            `Component ${comp.source_component_id ?? comp.pcb_component_id} (${compLayer}) overlaps keepout zone "${zone.name}".`,
-          ),
-        );
+        const srcComp = idx.compById.get(comp.source_component_id);
+        const compName = srcComp?.name ? String(srcComp.name) : "";
+        if (
+          exempt.has(compName) ||
+          exempt.has(String(comp.source_component_id ?? "")) ||
+          exempt.has(String(comp.pcb_component_id ?? ""))
+        ) {
+          continue;
+        }
+
+        const cx = comp.center?.x ?? 0;
+        const cy = comp.center?.y ?? 0;
+        if (boxOverlaps(cx, cy, (comp.width ?? 0) / 2, (comp.height ?? 0) / 2)) {
+          findings.push(
+            error(
+              "mechanical",
+              "mechanical.keepout.violation",
+              `Component ${compName || comp.source_component_id || comp.pcb_component_id} (${compLayer}) overlaps keepout zone "${zone.name}".`,
+            ),
+          );
+        }
       }
     }
 

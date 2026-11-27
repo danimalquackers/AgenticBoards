@@ -168,7 +168,9 @@ export function fromKicadLayer(layer: string): string {
   return layer.toLowerCase();
 }
 
-export function getKeepoutBox(zone: BoardSpec["keepoutZones"][number]): Box2D {
+export function getKeepoutBox(
+  zone: Pick<BoardSpec["keepoutZones"][number], "xMm" | "yMm" | "widthMm" | "heightMm">,
+): Box2D {
   return {
     minX: zone.xMm - zone.widthMm / 2,
     maxX: zone.xMm + zone.widthMm / 2,
